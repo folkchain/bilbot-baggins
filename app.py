@@ -228,22 +228,30 @@ def get_available_voices():
 
 async def generate_speech(text, voice, rate, pitch, output_file):
     """Generate speech from text"""
-    communicate = edge_tts.Communicate(
-        text=text, 
-        voice=voice, 
-        rate=f"{rate:+d}%", 
-        pitch=f"{pitch:+d}Hz"
-    )
-    await communicate.save(output_file)
+    try:
+        communicate = edge_tts.Communicate(
+            text=text, 
+            voice=voice, 
+            rate=f"{rate:+d}%", 
+            pitch=f"{pitch:+d}Hz"
+        )
+        await communicate.save(output_file)
+        return True
+    except Exception as e:
+        st.error(f"Error generating speech: {e}")
+        return False
 
 def combine_audio_files(file_list):
     """Combine multiple MP3 files into one using simple concatenation"""
     combined_data = b""
     
     for file_path in file_list:
-        with open(file_path, 'rb') as f:
-            mp3_data = f.read()
-            combined_data += mp3_data
+        try:
+            with open(file_path, 'rb') as f:
+                mp3_data = f.read()
+                combined_data += mp3_data
+        except Exception as e:
+            st.error(f"Error reading audio file {file_path}: {e}")
     
     return combined_data
 
@@ -290,9 +298,14 @@ with col1:
 with col2:
     speech_pitch = st.slider("Pitch", -20, 20, 0, help="Negative = lower, Positive = higher")
 
-# Text cleaning option
-clean_whitespace = st.checkbox("Clean up text formatting", value=True, 
-    help="Removes OCR errors, fixes spacing, handles quotes, and cleans up hyphenation issues")
+# Options
+col1, col2 = st.columns(2)
+with col1:
+    clean_whitespace = st.checkbox("Clean up text formatting", value=True, 
+        help="Removes OCR errors, fixes spacing, handles quotes, and cleans up hyphenation issues")
+with col2:
+    show_preview = st.checkbox("Show text preview", value=False,
+        help="Preview and download the processed text before generating audio")
 
 # Generate button
 if st.button("🎵 Generate Audiobook", type="primary"):
@@ -322,29 +335,33 @@ if st.button("🎵 Generate Audiobook", type="primary"):
     # Split into chunks
     text_chunks = split_into_chunks(text_content)
     
-    st.success(f"Found {len(text_content):,} characters in {len(text_chunks)} chunks")
+    st.success(f"✅ Processed {len(text_content):,} characters into {len(text_chunks)} audio chunks")
     
-    # Text preview and download section
-    st.markdown("### 📄 Review Processed Text")
-    st.markdown("Preview the first 500 characters:")
-    preview_text = text_content[:500] + "..." if len(text_content) > 500 else text_content
-    st.text_area("Text Preview", preview_text, height=150, disabled=True)
+    # Optional text preview
+    if show_preview:
+        with st.expander("📄 Text Preview & Download", expanded=True):
+            st.markdown("First 500 characters of processed text:")
+            preview_text = text_content[:500] + "..." if len(text_content) > 500 else text_content
+            st.text_area("Preview", preview_text, height=150, disabled=True)
 
-    # Download button for processed text
-    base_filename = os.path.splitext(filename)[0]
-    processed_filename = f"{base_filename}_processed.txt"
+            # Download button for processed text
+            base_filename = os.path.splitext(filename)[0]
+            processed_filename = f"{base_filename}_processed.txt"
 
-    st.download_button(
-        label="📥 Download Processed Text File",
-        data=text_content.encode('utf-8'),
-        file_name=processed_filename,
-        mime="text/plain",
-        help="Download the processed text to review before generating audio"
-    )
-
-    st.markdown("---")
+            st.download_button(
+                label="📥 Download Processed Text",
+                data=text_content.encode('utf-8'),
+                file_name=processed_filename,
+                mime="text/plain"
+            )
     
-    # Generate audio for each chunk
+    # Validate chunks
+    if not text_chunks:
+        st.error("No text chunks to process. The text might be too short or empty after cleaning.")
+        st.stop()
+    
+    # Generate audio
+    st.info("🎙️ Starting audio generation...")
     temp_files = []
     temp_dir = tempfile.mkdtemp()
     
@@ -352,43 +369,72 @@ if st.button("🎵 Generate Audiobook", type="primary"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
+        # Generate audio for each chunk
         for i, chunk in enumerate(text_chunks):
-            status_text.text(f"Generating audio for chunk {i+1} of {len(text_chunks)}...")
+            if not chunk.strip():
+                continue
+                
+            status_text.text(f"🎵 Generating audio for chunk {i+1} of {len(text_chunks)}...")
             
             temp_file = os.path.join(temp_dir, f"chunk_{i:03d}.mp3")
-            asyncio.run(generate_speech(chunk, selected_voice, speech_rate, speech_pitch, temp_file))
-            temp_files.append(temp_file)
+            
+            # Generate speech with error handling
+            success = asyncio.run(generate_speech(chunk, selected_voice, speech_rate, speech_pitch, temp_file))
+            
+            if success and os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+                temp_files.append(temp_file)
+                st.write(f"✅ Chunk {i+1} completed ({len(chunk)} characters)")
+            else:
+                st.warning(f"⚠️ Failed to generate chunk {i+1}")
             
             progress_bar.progress((i + 1) / len(text_chunks))
         
+        if not temp_files:
+            st.error("❌ No audio files were generated successfully. Please check your internet connection and try again.")
+            st.stop()
+        
         # Combine all audio files
-        status_text.text("Combining audio files...")
+        status_text.text("🔗 Combining audio files...")
         final_audio = combine_audio_files(temp_files)
+        
+        if not final_audio:
+            st.error("❌ Failed to combine audio files.")
+            st.stop()
         
         # Prepare download
         base_filename = os.path.splitext(filename)[0]
         download_filename = f"{base_filename}_audiobook_{selected_voice}.mp3"
         
-        st.success("✅ Audiobook generated successfully!")
+        # Clear status
+        progress_bar.empty()
+        status_text.empty()
+        
+        st.success("🎉 Audiobook generated successfully!")
+        st.info(f"📊 Generated {len(temp_files)} audio segments totaling {len(final_audio):,} bytes")
+        
         st.download_button(
             label="📥 Download MP3 Audiobook",
             data=final_audio,
             file_name=download_filename,
-            mime="audio/mpeg"
+            mime="audio/mpeg",
+            type="primary"
         )
         
     except Exception as e:
-        st.error(f"Error generating audiobook: {e}")
+        st.error(f"❌ Error generating audiobook: {str(e)}")
+        st.exception(e)  # This will show the full traceback for debugging
     
     finally:
         # Clean up temp files
         for temp_file in temp_files:
             try:
-                os.remove(temp_file)
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
             except:
                 pass
         try:
-            os.rmdir(temp_dir)
+            if os.path.exists(temp_dir):
+                os.rmdir(temp_dir)
         except:
             pass
 
@@ -396,6 +442,6 @@ st.markdown("---")
 st.markdown("**Tips:**")
 st.markdown("• For best results, use clean, well-formatted text")
 st.markdown("• Large files may take several minutes to process")
-st.markdown("• The app will automatically split long texts into manageable chunks")
+st.markdown("• Text preview is optional - uncheck to go straight to audio generation")
 st.markdown("• Text cleaning fixes OCR errors, quote spacing, and hyphenation issues")
-st.markdown("• Only US English male voices are available")
+st.markdown("• If audio generation fails, check your internet connection")
