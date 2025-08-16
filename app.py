@@ -150,6 +150,35 @@ def clean_text(text):
     
     return text.strip()
 
+# After text cleaning and before chunking
+if clean_whitespace:
+    text_content = clean_text(text_content)
+
+st.success(f"Found {len(text_content):,} characters in text")
+
+# ADD THIS SECTION - Download cleaned text
+st.markdown("### 📄 Review Cleaned Text")
+st.markdown("Preview the first 500 characters of cleaned text:")
+preview_text = text_content[:500] + "..." if len(text_content) > 500 else text_content
+st.text_area("Text Preview", preview_text, height=150, disabled=True)
+
+# Download button for cleaned text
+base_filename = os.path.splitext(filename)[0]
+cleaned_filename = f"{base_filename}_cleaned.txt"
+
+st.download_button(
+    label="📥 Download Cleaned Text File",
+    data=text_content.encode('utf-8'),
+    file_name=cleaned_filename,
+    mime="text/plain",
+    help="Download the cleaned text to review and edit before generating audio"
+)
+
+st.markdown("---")
+
+# Split into chunks (existing code continues here)
+text_chunks = split_into_chunks(text_content)
+
 def split_into_chunks(text, max_length=2000):
     """Split text into chunks suitable for TTS"""
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
