@@ -190,35 +190,6 @@ def clean_text(text):
     
     return text.strip()
 
-# After text cleaning and before chunking
-if clean_whitespace:
-    text_content = clean_text(text_content)
-
-st.success(f"Found {len(text_content):,} characters in text")
-
-# ADD THIS SECTION - Download cleaned text
-st.markdown("### 📄 Review Cleaned Text")
-st.markdown("Preview the first 500 characters of cleaned text:")
-preview_text = text_content[:500] + "..." if len(text_content) > 500 else text_content
-st.text_area("Text Preview", preview_text, height=150, disabled=True)
-
-# Download button for cleaned text
-base_filename = os.path.splitext(filename)[0]
-cleaned_filename = f"{base_filename}_cleaned.txt"
-
-st.download_button(
-    label="📥 Download Cleaned Text File",
-    data=text_content.encode('utf-8'),
-    file_name=cleaned_filename,
-    mime="text/plain",
-    help="Download the cleaned text to review and edit before generating audio"
-)
-
-st.markdown("---")
-
-# Split into chunks (existing code continues here)
-text_chunks = split_into_chunks(text_content)
-
 def split_into_chunks(text, max_length=2000):
     """Split text into chunks suitable for TTS"""
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
@@ -320,7 +291,8 @@ with col2:
     speech_pitch = st.slider("Pitch", -20, 20, 0, help="Negative = lower, Positive = higher")
 
 # Text cleaning option
-clean_whitespace = st.checkbox("Clean up text formatting", value=True)
+clean_whitespace = st.checkbox("Clean up text formatting", value=True, 
+    help="Removes OCR errors, fixes spacing, handles quotes, and cleans up hyphenation issues")
 
 # Generate button
 if st.button("🎵 Generate Audiobook", type="primary"):
@@ -344,12 +316,33 @@ if st.button("🎵 Generate Audiobook", type="primary"):
     
     # Clean text if requested
     if clean_whitespace:
-        text_content = clean_text(text_content)
+        with st.spinner("Cleaning text..."):
+            text_content = clean_text(text_content)
     
     # Split into chunks
     text_chunks = split_into_chunks(text_content)
     
     st.success(f"Found {len(text_content):,} characters in {len(text_chunks)} chunks")
+    
+    # Text preview and download section
+    st.markdown("### 📄 Review Processed Text")
+    st.markdown("Preview the first 500 characters:")
+    preview_text = text_content[:500] + "..." if len(text_content) > 500 else text_content
+    st.text_area("Text Preview", preview_text, height=150, disabled=True)
+
+    # Download button for processed text
+    base_filename = os.path.splitext(filename)[0]
+    processed_filename = f"{base_filename}_processed.txt"
+
+    st.download_button(
+        label="📥 Download Processed Text File",
+        data=text_content.encode('utf-8'),
+        file_name=processed_filename,
+        mime="text/plain",
+        help="Download the processed text to review before generating audio"
+    )
+
+    st.markdown("---")
     
     # Generate audio for each chunk
     temp_files = []
@@ -404,4 +397,5 @@ st.markdown("**Tips:**")
 st.markdown("• For best results, use clean, well-formatted text")
 st.markdown("• Large files may take several minutes to process")
 st.markdown("• The app will automatically split long texts into manageable chunks")
+st.markdown("• Text cleaning fixes OCR errors, quote spacing, and hyphenation issues")
 st.markdown("• Only US English male voices are available")
