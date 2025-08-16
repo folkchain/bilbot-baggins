@@ -203,7 +203,7 @@ selected_voice = st.selectbox(
     "Choose a male voice", 
     voice_options,
     index=0 if not voice_options else (
-        voice_options.index("en-US-GuyNeural") if "en-US-GuyNeural" in voice_options else 0
+        voice_options.index("en-US-AndrewNeural") if "en-US-AndrewNeural" in voice_options else 0
     )
 )
 
@@ -299,4 +299,4 @@ st.markdown("**Tips:**")
 st.markdown("• For best results, use clean, well-formatted text")
 st.markdown("• Large files may take several minutes to process")
 st.markdown("• The app will automatically split long texts into manageable chunks")
-st.markdown("• Only US English male voices are available for consistency")
+st.markdown("• Only US English male voices are available")
