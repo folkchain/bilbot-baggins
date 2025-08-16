@@ -90,8 +90,14 @@ def clean_text(text):
     text = re.sub(r"\u00AD\s*", "", text)
     text = re.sub(r"\u00AD", "", text)
     
+    # Convert Hangul Choseong Kiyeok (ᄀ) to regular hyphen
+    text = re.sub(r"\u1100", "-", text)
+    
     # Remove regular hyphens with spaces WITHIN words
     text = re.sub(r"(\b[A-Za-z]+)-\s+([A-Za-z]+\b)", r"\1\2", text)
+    
+    # Remove Hangul Kiyeok with spaces within words
+    text = re.sub(r"(\b[A-Za-z]+)\u1100\s+([A-Za-z]+\b)", r"\1\2", text)
     
     # Remove en-dash with spaces within words
     text = re.sub(r"(\b[A-Za-z]+)–\s*([A-Za-z]+\b)", r"\1\2", text)
@@ -105,42 +111,76 @@ def clean_text(text):
     # Handle double hyphens with spaces
     text = re.sub(r"(\b[A-Za-z]+)--\s*([A-Za-z]+\b)", r"\1\2", text)
     
-    # Remove any dash at end of line if next line starts with lowercase
-    text = re.sub(r"([A-Za-z])[\-–—\u2212]\s*\n\s*(?=[a-z])", r"\1", text)
+    # Remove any dash at end of line if next line starts with lowercase (including Hangul Kiyeok)
+    text = re.sub(r"([A-Za-z])[\-–—\u2212\u1100]\s*\n\s*(?=[a-z])", r"\1", text)
+    
+    # Remove Hangul Kiyeok at end of line if next line starts with lowercase
+    text = re.sub(r"([a-z])\u1100\s*\r?\n\s*(?=[a-z])", r"\1", text)
     
     # Join hyphenated words with space
-    text = re.sub(r"\b([A-Za-z]+)[\-–—\u2212]\s+([A-Za-z]+)\b", r"\1\2", text)
+    text = re.sub(r"\b([A-Za-z]+)[\-–—\u2212\u1100]\s+([A-Za-z]+)\b", r"\1\2", text)
     
     # 6) JOIN WRAPPED LINES (conservative)
     # Only join if line doesn't end with sentence punctuation
     text = re.sub(r"([a-z,;])\s*\n(?=[a-z])", r"\1 ", text)
     
+    # Fix single words on their own lines
+    text = re.sub(r"(?m)^(\w+)\s*\n(?=\w)", r"\1 ", text)
+    
     # 7) WHITESPACE CLEANUP
     # Trim trailing whitespace
     text = re.sub(r"(?m)[ \t]+$", "", text)
+    
     # Collapse 3+ spaces to 1
     text = re.sub(r"[ \t]{3,}", " ", text)
-    # Collapse 4+ blank lines to 2
-    text = re.sub(r"(?:\n){4,}", "\n\n", text)
     
-    # Basic punctuation spacing
+    # Collapse 4+ blank lines to 2
+    text = re.sub(r"(?:\r?\n){4,}", "\n\n", text)
+    
+    # Remove space before punctuation
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    
+    # Add space after sentence punctuation before capital letters
     text = re.sub(r"([.?!])([A-Z])", r"\1 \2", text)
     
-    # 8) PUNCTUATION CLEANUP
-    # Only collapse really excessive punctuation
+    # Collapse 4+ periods to ellipsis
     text = re.sub(r"\.{4,}", "...", text)
+    
+    # 8) QUOTE SPACING FIXES
+    # Fix escaped quotes with spaces: \" text \" -> "text"
+    text = re.sub(r'\\\s*"\s*([^"]*?)\s*"\s*', r' "\1" ', text)
+    
+    # Normalize multiple spaces around quotes
+    text = re.sub(r"\s+([\"'])([^\"']*?)([\"'])\s+", r' \1\2\3 ', text)
+    
+    # Remove space after opening quotes
+    text = re.sub(r"([\"'])\s+([^\s])", r"\1\2", text)
+    
+    # Remove space before closing quotes
+    text = re.sub(r"([^\s])\s+([\"'])", r"\1\2", text)
+    
+    # Normalize spacing around quotes
+    text = re.sub(r"\s*([\"'])\s*", r" \1", text)
+    
+    # Proper spacing before quotes with letters
+    text = re.sub(r"\s([\"'])([A-Za-z])", r" \1\2", text)
+    
+    # Proper spacing after quotes with punctuation
+    text = re.sub(r"([.!?])([\"'])\s", r"\1\2 ", text)
+    
+    # 9) PUNCTUATION CLEANUP
+    # Only collapse really excessive punctuation
     text = re.sub(r",{3,}", ",", text)
     text = re.sub(r";{3,}", ";", text)
     text = re.sub(r":{3,}", ":", text)
     
-    # 9) OCR ERROR FIXES
+    # 10) OCR ERROR FIXES
     # Join single spaced letters (clear OCR error)
     text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3\4\5", text)
     text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3\4", text)
     text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3", text)
     
-    # 10) REMOVE PROBLEMATIC CHARACTERS
+    # 11) REMOVE PROBLEMATIC CHARACTERS
     # Remove characters that cause TTS issues or are formatting artifacts
     text = re.sub(r"[~*{}<>^\[\]@•=_/\\|£]", "", text)
     text = re.sub(r"- -", "-", text)
