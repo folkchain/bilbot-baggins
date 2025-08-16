@@ -44,10 +44,74 @@ def read_pdf_file(file_bytes):
         return ""
 
 def clean_text(text):
-    """Clean up whitespace and formatting"""
+    """Comprehensive text cleanup for better TTS output"""
+    
+    # 1) NORMALIZE LINE ENDINGS
     text = text.replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)  # Multiple spaces/tabs to single space
-    text = re.sub(r"\n{2,}", "\n\n", text)  # Multiple newlines to double newline
+    
+    # 2) HYPHEN/DASH CLEANUP (all types with spaces)
+    # Remove soft hyphens with any amount of space
+    text = re.sub(r"\u00AD\s*", "", text)
+    text = re.sub(r"\u00AD", "", text)
+    
+    # Remove regular hyphens with spaces WITHIN words
+    text = re.sub(r"(\b[A-Za-z]+)-\s+([A-Za-z]+\b)", r"\1\2", text)
+    
+    # Remove en-dash with spaces within words
+    text = re.sub(r"(\b[A-Za-z]+)–\s*([A-Za-z]+\b)", r"\1\2", text)
+    
+    # Remove em-dash with spaces within words  
+    text = re.sub(r"(\b[A-Za-z]+)—\s*([A-Za-z]+\b)", r"\1\2", text)
+    
+    # Remove minus sign with spaces within words
+    text = re.sub(r"(\b[A-Za-z]+)\u2212\s*([A-Za-z]+\b)", r"\1\2", text)
+    
+    # Handle double hyphens with spaces (like intel-- lectual)
+    text = re.sub(r"(\b[A-Za-z]+)--\s*([A-Za-z]+\b)", r"\1\2", text)
+    
+    # Remove any dash at end of line if next line starts with lowercase
+    text = re.sub(r"([A-Za-z])[\-–—\u2212]\s*\n\s*(?=[a-z])", r"\1", text)
+    
+    # Specific pattern: word+hyphen+space+word should join
+    text = re.sub(r"\b([A-Za-z]+)[\-–—\u2212]\s+([A-Za-z]+)\b", r"\1\2", text)
+    
+    # 3) JOIN WRAPPED LINES (conservative)
+    # Only join if line doesn't end with sentence punctuation
+    text = re.sub(r"([a-z,;])\s*\n(?=[a-z])", r"\1 ", text)
+    
+    # 4) WHITESPACE CLEANUP (safe)
+    # Trim trailing whitespace
+    text = re.sub(r"(?m)[ \t]+$", "", text)
+    # Collapse 3+ spaces to 1
+    text = re.sub(r"[ \t]{3,}", " ", text)
+    # Collapse 4+ blank lines to 2
+    text = re.sub(r"(?:\n){4,}", "\n\n", text)
+    
+    # Basic punctuation spacing
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"([.?!])([A-Z])", r"\1 \2", text)
+    
+    # 5) MINIMAL CLEANUP (very conservative)
+    # Only collapse really excessive punctuation
+    text = re.sub(r"\.{4,}", "...", text)
+    text = re.sub(r",{3,}", ",", text)
+    text = re.sub(r";{3,}", ";", text)
+    text = re.sub(r":{3,}", ":", text)
+    
+    # Join single spaced letters (clear OCR error)
+    text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3\4\5", text)
+    text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3\4", text)
+    text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3", text)
+    
+    # 6) REMOVE PROBLEMATIC CHARACTERS
+    # Remove characters that cause TTS issues or are formatting artifacts
+    text = re.sub(r"[~*{}<>^\[\]@•=_/\\|£]", "", text)
+    text = re.sub(r"!", "", text)  # Remove exclamation marks if they're causing issues
+    text = re.sub(r"- -", "-", text)
+    
+    # Final space cleanup
+    text = re.sub(r"  +", " ", text)
+    
     return text.strip()
 
 def split_into_chunks(text, max_length=2000):
