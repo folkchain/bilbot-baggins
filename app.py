@@ -57,8 +57,11 @@ def clean_text(text):
     text = text.replace("ﬄ", "ffl")
     
     # 3) QUOTE & APOSTROPHE NORMALIZATION
-    text = re.sub(r"["""]", '"', text)
-    text = re.sub(r"[''']", "'", text)
+    # Convert curly quotes to straight quotes
+    text = text.replace(""", '"')
+    text = text.replace(""", '"')
+    text = text.replace("'", "'")
+    text = text.replace("'", "'")
     
     # 4) REMOVE UNWANTED CONTENT
     # Remove standalone page numbers (1-4 digits only)
