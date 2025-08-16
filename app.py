@@ -9,7 +9,6 @@ from typing import List
 import edge_tts
 import pdfplumber
 from pypdf import PdfReader
-from pydub import AudioSegment
 
 def read_text_file(file_bytes):
     """Read text from uploaded file"""
@@ -98,18 +97,15 @@ async def generate_speech(text, voice, rate, pitch, output_file):
     await communicate.save(output_file)
 
 def combine_audio_files(file_list):
-    """Combine multiple MP3 files into one"""
-    combined = AudioSegment.silent(duration=100)  # Start with brief silence
+    """Combine multiple MP3 files into one using simple concatenation"""
+    combined_data = b""
     
     for file_path in file_list:
-        audio = AudioSegment.from_file(file_path, format="mp3")
-        combined += audio + AudioSegment.silent(duration=200)  # Add pause between chunks
+        with open(file_path, 'rb') as f:
+            mp3_data = f.read()
+            combined_data += mp3_data
     
-    # Export to bytes
-    output_buffer = io.BytesIO()
-    combined.export(output_buffer, format="mp3", bitrate="128k")
-    output_buffer.seek(0)
-    return output_buffer.read()
+    return combined_data
 
 # Streamlit UI
 st.set_page_config(
