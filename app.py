@@ -49,7 +49,40 @@ def clean_text(text):
     # 1) NORMALIZE LINE ENDINGS
     text = text.replace("\r", "\n")
     
-    # 2) HYPHEN/DASH CLEANUP (all types with spaces)
+    # 2) LIGATURE FIXES
+    text = text.replace("ﬁ", "fi")
+    text = text.replace("ﬂ", "fl") 
+    text = text.replace("ﬀ", "ff")
+    text = text.replace("ﬃ", "ffi")
+    text = text.replace("ﬄ", "ffl")
+    
+    # 3) QUOTE & APOSTROPHE NORMALIZATION
+    text = re.sub(r"["""]", '"', text)
+    text = re.sub(r"[''']", "'", text)
+    
+    # 4) REMOVE UNWANTED CONTENT
+    # Remove standalone page numbers (1-4 digits only)
+    text = re.sub(r"(?m)^\s*\d{1,4}\s*$", "", text)
+    
+    # Remove common header/footer patterns
+    text = re.sub(r"(?m)^(Chapter|CHAPTER)\s+\d+.*$", "", text)
+    text = re.sub(r"(?m)^\s*Page\s+\d+.*$", "", text)
+    
+    # Remove URLs and emails
+    text = re.sub(r"https?://[^\s]+", "", text)
+    text = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", "", text)
+    
+    # Remove TOC lines with dots and page numbers
+    text = re.sub(r"(?m)^.*\.{3,}.*\d+\s*$", "", text)
+    
+    # Remove parenthetical citations
+    text = re.sub(r"\([A-Z][a-z]+,?\s+\d{4}\)", "", text)  # (Smith, 2019)
+    text = re.sub(r"\[[0-9,\s-]+\]", "", text)  # [1,2,3] or [1-5]
+    
+    # Remove footnote markers (be conservative)
+    text = re.sub(r"(?<=\w)\d+(?=\s|$|[,.!?])", "", text)
+    
+    # 5) HYPHEN/DASH CLEANUP (all types with spaces)
     # Remove soft hyphens with any amount of space
     text = re.sub(r"\u00AD\s*", "", text)
     text = re.sub(r"\u00AD", "", text)
@@ -66,20 +99,20 @@ def clean_text(text):
     # Remove minus sign with spaces within words
     text = re.sub(r"(\b[A-Za-z]+)\u2212\s*([A-Za-z]+\b)", r"\1\2", text)
     
-    # Handle double hyphens with spaces (like intel-- lectual)
+    # Handle double hyphens with spaces
     text = re.sub(r"(\b[A-Za-z]+)--\s*([A-Za-z]+\b)", r"\1\2", text)
     
     # Remove any dash at end of line if next line starts with lowercase
     text = re.sub(r"([A-Za-z])[\-–—\u2212]\s*\n\s*(?=[a-z])", r"\1", text)
     
-    # Specific pattern: word+hyphen+space+word should join
+    # Join hyphenated words with space
     text = re.sub(r"\b([A-Za-z]+)[\-–—\u2212]\s+([A-Za-z]+)\b", r"\1\2", text)
     
-    # 3) JOIN WRAPPED LINES (conservative)
+    # 6) JOIN WRAPPED LINES (conservative)
     # Only join if line doesn't end with sentence punctuation
     text = re.sub(r"([a-z,;])\s*\n(?=[a-z])", r"\1 ", text)
     
-    # 4) WHITESPACE CLEANUP (safe)
+    # 7) WHITESPACE CLEANUP
     # Trim trailing whitespace
     text = re.sub(r"(?m)[ \t]+$", "", text)
     # Collapse 3+ spaces to 1
@@ -91,22 +124,22 @@ def clean_text(text):
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     text = re.sub(r"([.?!])([A-Z])", r"\1 \2", text)
     
-    # 5) MINIMAL CLEANUP (very conservative)
+    # 8) PUNCTUATION CLEANUP
     # Only collapse really excessive punctuation
     text = re.sub(r"\.{4,}", "...", text)
     text = re.sub(r",{3,}", ",", text)
     text = re.sub(r";{3,}", ";", text)
     text = re.sub(r":{3,}", ":", text)
     
+    # 9) OCR ERROR FIXES
     # Join single spaced letters (clear OCR error)
     text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3\4\5", text)
     text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3\4", text)
     text = re.sub(r"\b([A-Za-z])\s([A-Za-z])\s([A-Za-z])\b", r"\1\2\3", text)
     
-    # 6) REMOVE PROBLEMATIC CHARACTERS
+    # 10) REMOVE PROBLEMATIC CHARACTERS
     # Remove characters that cause TTS issues or are formatting artifacts
     text = re.sub(r"[~*{}<>^\[\]@•=_/\\|£]", "", text)
-    text = re.sub(r"!", "", text)  # Remove exclamation marks if they're causing issues
     text = re.sub(r"- -", "-", text)
     
     # Final space cleanup
