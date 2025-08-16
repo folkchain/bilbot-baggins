@@ -2,5 +2,3 @@ streamlit
 edge-tts
 pypdf
 pdfplumber
-pydub
-ffmpeg-python
