@@ -39,9 +39,7 @@ class AudioBookGenerator:
             'audio_data': None,
             'download_filename': None,
             'text_stats': None,
-            'processing_progress': {},
-            'temp_files': [],
-            'current_chunks': None
+            'processing_complete': False
         }
         
         for var, default in session_vars.items():
@@ -130,11 +128,12 @@ class AudioBookGenerator:
                     os.unlink(temp_file.name)
         return b""
 
-    def process_file(self, uploaded_file, clean_text: bool, quality_setting: str) -> bool:
-        """Process uploaded file and prepare for audio generation"""
+    async def generate_audiobook(self, uploaded_file, voice: str, rate: int, pitch: int, 
+                               clean_text: bool, quality_setting: str) -> bool:
+        """Process file and generate audiobook in one step"""
         try:
-            # Read file content
-            with st.spinner("Reading file..."):
+            # Step 1: Read and process file
+            with st.spinner("Reading and processing file..."):
                 file_content = uploaded_file.read()
                 filename = uploaded_file.name
                 
@@ -147,24 +146,21 @@ class AudioBookGenerator:
                 st.error("No text found in the file. For PDFs, make sure it contains selectable text, not just images.")
                 return False
             
-            # Clean text if requested
+            # Step 2: Clean text if requested
             if clean_text:
                 with st.spinner("Cleaning text..."):
                     text_content = self.text_processor.clean_text(text_content)
             
-            # Get chunk size from quality setting
+            # Step 3: Get chunk size and split text
             chunk_size = AudioConfig.QUALITY_SETTINGS[quality_setting]["chunk_size"]
-            
-            # Split into chunks
             text_chunks = self.text_processor.smart_split_into_chunks(text_content, chunk_size)
             
             if not text_chunks:
                 st.error("No text chunks to process. The text might be too short or empty after cleaning.")
                 return False
             
-            # Store in session state
+            # Store processed text and stats for preview/download
             st.session_state.processed_text = text_content
-            st.session_state.current_chunks = text_chunks
             st.session_state.text_stats = self.text_processor.get_text_stats(text_content)
             
             # Show processing results
@@ -179,105 +175,93 @@ class AudioBookGenerator:
             with col3:
                 st.metric("Audio Chunks", len(text_chunks))
             
-            return True
+            # Step 4: Generate audio
+            temp_files = []
+            temp_dir = tempfile.mkdtemp(prefix=AudioConfig.TEMP_DIR_PREFIX)
             
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
-            return False
-
-    async def generate_audiobook(self, voice: str, rate: int, pitch: int) -> bool:
-        """Generate audiobook from processed chunks"""
-        if not st.session_state.current_chunks:
-            st.error("No text chunks available. Please process a file first.")
-            return False
-        
-        text_chunks = st.session_state.current_chunks
-        temp_files = []
-        temp_dir = tempfile.mkdtemp(prefix=AudioConfig.TEMP_DIR_PREFIX)
-        
-        try:
-            st.info("🎙️ Starting audio generation...")
-            progress_bar = st.progress(0)
-            status_container = st.container()
-            
-            start_time = time.time()
-            
-            # Generate audio for each chunk
-            for i, chunk in enumerate(text_chunks):
-                if not chunk.strip():
-                    continue
+            try:
+                st.info("🎙️ Starting audio generation...")
+                progress_bar = st.progress(0)
+                status_container = st.container()
                 
-                with status_container:
-                    st.text(f"🎵 Generating audio for chunk {i+1} of {len(text_chunks)}...")
-                    self.show_progress_with_eta(i, len(text_chunks), start_time)
+                start_time = time.time()
                 
-                temp_file = os.path.join(temp_dir, f"chunk_{i:03d}.mp3")
+                # Generate audio for each chunk
+                for i, chunk in enumerate(text_chunks):
+                    if not chunk.strip():
+                        continue
+                    
+                    with status_container:
+                        st.text(f"🎵 Generating audio for chunk {i+1} of {len(text_chunks)}...")
+                        self.show_progress_with_eta(i, len(text_chunks), start_time)
+                    
+                    temp_file = os.path.join(temp_dir, f"chunk_{i:03d}.mp3")
+                    
+                    # Generate speech
+                    success = await self.generate_speech_with_retry(
+                        chunk, voice, f"{rate:+d}%", f"{pitch:+d}Hz", temp_file
+                    )
+                    
+                    if success:
+                        temp_files.append(temp_file)
+                        st.write(f"✅ Chunk {i+1} completed ({len(chunk)} characters)")
+                    else:
+                        st.warning(f"⚠️ Failed to generate chunk {i+1}")
+                    
+                    progress_bar.progress((i + 1) / len(text_chunks))
                 
-                # Generate speech
-                success = await self.generate_speech_with_retry(
-                    chunk, voice, f"{rate:+d}%", f"{pitch:+d}Hz", temp_file
-                )
+                if not temp_files:
+                    st.error("❌ No audio files were generated successfully.")
+                    return False
                 
-                if success:
-                    temp_files.append(temp_file)
-                    st.write(f"✅ Chunk {i+1} completed ({len(chunk)} characters)")
-                else:
-                    st.warning(f"⚠️ Failed to generate chunk {i+1}")
+                # Step 5: Combine audio files
+                status_container.text("🔗 Combining audio files...")
+                final_audio = self.combine_audio_files(temp_files)
                 
-                progress_bar.progress((i + 1) / len(text_chunks))
-            
-            if not temp_files:
-                st.error("❌ No audio files were generated successfully.")
-                return False
-            
-            # Combine audio files
-            status_container.text("🔗 Combining audio files...")
-            final_audio = self.combine_audio_files(temp_files)
-            
-            if not final_audio:
-                st.error("❌ Failed to combine audio files.")
-                return False
-            
-            # Store results
-            base_filename = os.path.splitext(uploaded_file.name)[0]
-            download_filename = f"{base_filename}_audiobook_{voice}.mp3"
-            
-            st.session_state.audio_data = final_audio
-            st.session_state.download_filename = download_filename
-            st.session_state.temp_files = temp_files
-            
-            # Clear progress indicators
-            progress_bar.empty()
-            status_container.empty()
-            
-            # Show audio preview
-            if temp_files:
-                with st.expander("🔊 Audio Preview (First Chunk)", expanded=False):
-                    with open(temp_files[0], 'rb') as f:
-                        st.audio(f.read(), format='audio/mp3')
-            
-            st.success("🎉 Audiobook generated successfully!")
-            st.info(f"📊 Generated {len(temp_files)} audio segments totaling {len(final_audio):,} bytes")
-            
-            return True
+                if not final_audio:
+                    st.error("❌ Failed to combine audio files.")
+                    return False
+                
+                # Store results
+                base_filename = os.path.splitext(filename)[0]
+                download_filename = f"{base_filename}_audiobook_{voice}.mp3"
+                
+                st.session_state.audio_data = final_audio
+                st.session_state.download_filename = download_filename
+                st.session_state.processing_complete = True
+                
+                # Clear progress indicators
+                progress_bar.empty()
+                status_container.empty()
+                
+                # Show audio preview
+                if temp_files:
+                    with st.expander("🔊 Audio Preview (First Chunk)", expanded=False):
+                        with open(temp_files[0], 'rb') as f:
+                            st.audio(f.read(), format='audio/mp3')
+                
+                st.success("🎉 Audiobook generated successfully!")
+                st.info(f"📊 Generated {len(temp_files)} audio segments totaling {len(final_audio):,} bytes")
+                
+                return True
+                
+            finally:
+                # Clean up temp files
+                for temp_file in temp_files:
+                    try:
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
+                    except:
+                        pass
+                try:
+                    if os.path.exists(temp_dir):
+                        os.rmdir(temp_dir)
+                except:
+                    pass
             
         except Exception as e:
             st.error(f"❌ Error generating audiobook: {str(e)}")
             return False
-        
-        finally:
-            # Clean up temp files
-            for temp_file in temp_files:
-                try:
-                    if os.path.exists(temp_file):
-                        os.remove(temp_file)
-                except:
-                    pass
-            try:
-                if os.path.exists(temp_dir):
-                    os.rmdir(temp_dir)
-            except:
-                pass
 
 
 def main():
@@ -301,60 +285,63 @@ def main():
         help="Choose a .txt file or searchable PDF to convert to audio"
     )
     
-    # Voice selection
-    voices = generator.get_available_voices()
-    if not voices:
-        st.error("Could not load voice list. Please refresh the page.")
-        st.stop()
+    if uploaded_file:
+        # Voice selection
+        voices = generator.get_available_voices()
+        if not voices:
+            st.error("Could not load voice list. Please refresh the page.")
+            st.stop()
+        
+        voice_options = [v.get("ShortName") for v in voices]
+        st.write(f"**Available voices:** {len(voice_options)} US English Male Neural voices")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            selected_voice = st.selectbox(
+                "Choose a male voice", 
+                voice_options,
+                index=voice_options.index(AudioConfig.DEFAULT_VOICE) if AudioConfig.DEFAULT_VOICE in voice_options else 0
+            )
+        
+        with col2:
+            if st.button("🎵 Preview Voice"):
+                with st.spinner("Generating voice sample..."):
+                    sample_audio = asyncio.run(generator.generate_voice_sample(selected_voice, 0, 0))
+                    if sample_audio:
+                        st.audio(sample_audio, format='audio/mp3')
+        
+        # Voice settings
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            speech_rate = st.slider("Speech Rate", -50, 50, 0, help="Negative = slower, Positive = faster")
+        with col2:
+            speech_pitch = st.slider("Pitch", -20, 20, 0, help="Negative = lower, Positive = higher")
+        with col3:
+            quality_setting = st.selectbox(
+                "Quality Setting", 
+                list(AudioConfig.QUALITY_SETTINGS.keys()), 
+                index=1,
+                help="Higher quality = slower processing but better results"
+            )
+        
+        # Options
+        col1, col2 = st.columns(2)
+        with col1:
+            clean_whitespace = st.checkbox("Clean up text formatting", value=True, 
+                help="Removes OCR errors, fixes spacing, handles quotes, and cleans up hyphenation issues")
+        with col2:
+            show_preview = st.checkbox("Show text preview", value=False,
+                help="Preview and download the processed text after generation")
+        
+        # Generate audiobook button
+        if st.button("🎵 Generate Audiobook", type="primary"):
+            asyncio.run(generator.generate_audiobook(
+                uploaded_file, selected_voice, speech_rate, speech_pitch, clean_whitespace, quality_setting
+            ))
     
-    voice_options = [v.get("ShortName") for v in voices]
-    st.write(f"**Available voices:** {len(voice_options)} US English Male Neural voices")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        selected_voice = st.selectbox(
-            "Choose a male voice", 
-            voice_options,
-            index=voice_options.index(AudioConfig.DEFAULT_VOICE) if AudioConfig.DEFAULT_VOICE in voice_options else 0
-        )
-    
-    with col2:
-        if st.button("🎵 Preview Voice"):
-            with st.spinner("Generating voice sample..."):
-                sample_audio = asyncio.run(generator.generate_voice_sample(selected_voice, 0, 0))
-                if sample_audio:
-                    st.audio(sample_audio, format='audio/mp3')
-    
-    # Voice settings
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        speech_rate = st.slider("Speech Rate", -50, 50, 0, help="Negative = slower, Positive = faster")
-    with col2:
-        speech_pitch = st.slider("Pitch", -20, 20, 0, help="Negative = lower, Positive = higher")
-    with col3:
-        quality_setting = st.selectbox(
-            "Quality Setting", 
-            list(AudioConfig.QUALITY_SETTINGS.keys()), 
-            index=1,
-            help="Higher quality = slower processing but better results"
-        )
-    
-    # Options
-    col1, col2 = st.columns(2)
-    with col1:
-        clean_whitespace = st.checkbox("Clean up text formatting", value=True, 
-            help="Removes OCR errors, fixes spacing, handles quotes, and cleans up hyphenation issues")
-    with col2:
-        show_preview = st.checkbox("Show text preview", value=False,
-            help="Preview and download the processed text before generating audio")
-    
-    # Process file button
-    if uploaded_file and st.button("📄 Process File", type="secondary"):
-        generator.process_file(uploaded_file, clean_whitespace, quality_setting)
-    
-    # Show text preview and download if available
-    if st.session_state.processed_text and show_preview:
+    # Show text preview and download if available (after generation)
+    if st.session_state.processed_text and show_preview and st.session_state.processing_complete:
         with st.expander("📄 Text Preview & Download", expanded=True):
             st.markdown("**Text Statistics:**")
             if st.session_state.text_stats:
@@ -372,20 +359,17 @@ def main():
             st.text_area("Preview", preview_text, height=150, disabled=True)
             
             # Download processed text
-            base_filename = os.path.splitext(uploaded_file.name)[0]
-            processed_filename = f"{base_filename}_processed.txt"
-            
-            st.download_button(
-                label="📥 Download Processed Text",
-                data=st.session_state.processed_text.encode('utf-8'),
-                file_name=processed_filename,
-                mime="text/plain",
-                key="download_text"
-            )
-    
-    # Generate audiobook button
-    if st.session_state.current_chunks and st.button("🎵 Generate Audiobook", type="primary"):
-        asyncio.run(generator.generate_audiobook(selected_voice, speech_rate, speech_pitch))
+            if uploaded_file:
+                base_filename = os.path.splitext(uploaded_file.name)[0]
+                processed_filename = f"{base_filename}_processed.txt"
+                
+                st.download_button(
+                    label="📥 Download Processed Text",
+                    data=st.session_state.processed_text.encode('utf-8'),
+                    file_name=processed_filename,
+                    mime="text/plain",
+                    key="download_text"
+                )
     
     # Show audio download if available
     if st.session_state.audio_data:
@@ -403,20 +387,19 @@ def main():
         # Option to clear and start over
         if st.button("🔄 Start Over"):
             # Clear session state
-            for key in ['processed_text', 'audio_data', 'download_filename', 'text_stats', 'current_chunks']:
+            for key in ['processed_text', 'audio_data', 'download_filename', 'text_stats', 'processing_complete']:
                 st.session_state[key] = None
             st.rerun()
     
-    # Tips section
-    st.markdown("---")
-    st.markdown("**Tips:**")
-    st.markdown("• Process your file first, then generate the audiobook")
-    st.markdown("• Use voice preview to test different voices before generating")
-    st.markdown("• Higher quality settings take longer but produce better results")
-    st.markdown("• Text cleaning fixes common OCR and formatting issues")
-    st.markdown("• Large files may take several minutes to process")
-    st.markdown("• If generation fails, check your internet connection and try again")
-
+    # Show tips only when no file is uploaded
+    if not uploaded_file:
+        st.markdown("---")
+        st.markdown("**Tips:**")
+        st.markdown("• Upload a text file or PDF to get started")
+        st.markdown("• Use voice preview to test different voices")
+        st.markdown("• Higher quality settings take longer but produce better results")
+        st.markdown("• Text cleaning fixes common OCR and formatting issues")
+        st.markdown("• Large files may take several minutes to process")
 
 if __name__ == "__main__":
     main()
