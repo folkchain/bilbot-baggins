@@ -24,18 +24,17 @@ st.set_page_config(
     page_title=f"{APP_NAME} - Audiobook",
     page_icon=_logo_img,
     layout="centered",
+    initial_sidebar_state="auto",
+    theme="light"  # <-- THIS LINE FORCES THE LIGHT THEME
 )
 
 def _inject_css():
     with open(LOGO_PATH, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
 
+    # Removed the .stApp background and color to let the theme handle it
     css = f"""
     <style>
-      .stApp {{
-        background: linear-gradient(180deg, #F4EEDA 0%, #EFE7CC 100%);
-        color: #2E2A22;
-      }}
       .bilbot-hero {{
         display:flex; align-items:center; gap:16px; margin: 4px 0 12px 0;
         padding: 12px 16px; border-radius: 16px;
@@ -53,7 +52,6 @@ def _inject_css():
       .bilbot-sub {{
         margin: 2px 0 0 0; color: #4A7C59; font-size: 14px;
       }}
-      section[data-testid="stSidebar"] > div {{ background: #EFE7CC; }}
       .stButton>button, .stDownloadButton>button {{
         border-radius: 12px; padding: 10px 16px; border: 2px solid #3A2F21;
         background:#4A7C59; color:#F4EEDA; font-weight:600;
@@ -62,7 +60,6 @@ def _inject_css():
       .stSelectbox div[data-baseweb="select"] > div {{
         border-radius: 12px; border: 2px solid #3A2F21;
       }}
-      pre, code, .stText {{ color: #2E2A22; }}
     </style>
     <div class="bilbot-hero">
       <img src="data:image/png;base64,{b64}" alt="BilBot Baggins logo"/>
@@ -151,7 +148,7 @@ st.write("---")
 current_options = (remove_headers, remove_footnotes)
 if uploaded:
     file_identifier = (uploaded.name, uploaded.size)
-    if file_identifier != st.session_state.last_file_identifier or current_options != st.session_state.last_options:
+    if file_identifier != st.session_state.get('last_file_identifier') or current_options != st.session_state.get('last_options'):
         st.session_state.last_file_identifier = file_identifier
         st.session_state.last_options = current_options
         st.session_state.mp3_bytes = None
@@ -160,25 +157,24 @@ if uploaded:
             data = uploaded.read()
             ext = Path(uploaded.name).suffix.lower()
             raw_text = TextProcessor.read_pdf_file(data) if ext == ".pdf" else TextProcessor.read_text_file(data)
-            if raw_text == "ERROR: Not a valid PDF file.":
-                st.error("The uploaded file is not a valid PDF. Please check the file and try again.")
-                # Clear state to prevent further action
+            
+            if "ERROR:" in raw_text:
+                st.error(raw_text)
                 st.session_state.chunks = []
                 st.session_state.cleaned_text = ""
             else:
-              # continue with cleaning and chunking as normal
-              st.session_state.cleaned_text = TextProcessor.clean_text(
-                raw_text,
-                remove_running_headers=remove_headers,
-                remove_bottom_footnotes=remove_footnotes,
-              )
-            max_chars = pick_chunk_size(st.session_state.cleaned_text)
-            st.session_state.chunks = TextProcessor.smart_split_into_chunks(
-                st.session_state.cleaned_text, max_length=max_chars
-            )
-        st.success(f"Text processed into {len(st.session_state.chunks)} chunks. Ready to generate.")
+                st.session_state.cleaned_text = TextProcessor.clean_text(
+                    raw_text,
+                    remove_running_headers=remove_headers,
+                    remove_bottom_footnotes=remove_footnotes,
+                )
+                max_chars = pick_chunk_size(st.session_state.cleaned_text)
+                st.session_state.chunks = TextProcessor.smart_split_into_chunks(
+                    st.session_state.cleaned_text, max_length=max_chars
+                )
+                st.success(f"Text processed into {len(st.session_state.chunks)} chunks. Ready to generate.")
 
-if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_state.chunks):
+if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_state.get('chunks')):
     with st.spinner("Generating audio..."):
         chunks = st.session_state.chunks
         try:
@@ -195,10 +191,8 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
                     part_paths.append(part_path)
                 final_bytes = b"".join(open(p, "rb").read() for p in part_paths)
                 
-                # --- Store results in session state ---
-                out_base = Path(uploaded.name).stem
                 st.session_state.mp3_bytes = final_bytes
-                # --- CORRECTED FILENAMES ---
+                out_base = Path(uploaded.name).stem
                 st.session_state.mp3_filename = f"{out_base}.mp3"
                 st.session_state.txt_filename = f"{out_base}.clean.txt"
         
@@ -207,21 +201,12 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
             st.text_area("Problematic Text", ch, height=200)
             st.session_state.mp3_bytes = None
 
-if st.session_state.mp3_bytes:
+if st.session_state.get('mp3_bytes'):
     st.success("✅ Your audiobook is ready!")
     c1, c2 = st.columns(2)
-    c1.download_button(
-        "⬇️ Download MP3",
-        data=st.session_state.mp3_bytes,
-        file_name=st.session_state.mp3_filename,
-        mime="audio/mpeg"
-    )
-    c2.download_button(
-        "⬇️ Download Cleaned Text",
-        data=st.session_state.cleaned_text.encode("utf-8"),
-        file_name=st.session_state.txt_filename,
-        mime="text/plain"
-    )
+    c1.download_button( "⬇️ Download MP3", data=st.session_state.mp3_bytes, file_name=st.session_state.mp3_filename, mime="audio/mpeg")
+    c2.download_button("⬇️ Download Cleaned Text", data=st.session_state.cleaned_text.encode("utf-8"), file_name=st.session_state.txt_filename, mime="text/plain")
+    
     if st.button("🔄 Reset and Start Over"):
         st.session_state.clear()
         st.rerun()
