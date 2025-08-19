@@ -31,38 +31,39 @@ class TextProcessor:
         """
         Enhanced PDF reading that prioritizes OCR for better quality.
         """
-        # First, try native extraction methods
+        # (The content of this method is correct, no changes needed here)
+        # ... (rest of the read_pdf_file method)
+         # --- File Type Verification ---
+        if not file_bytes.startswith(b'%PDF-'):
+            print("ERROR: Uploaded file is not a valid PDF.")
+            # Use st.error in app.py, but here we return empty and handle it there
+            return "ERROR: Not a valid PDF file."
+        
         native_results = []
         
-        # Try pdfplumber with layout mode first (often best for spacing)
         txt = extract_with_pdfplumber(file_bytes)
         if txt:
             native_results.append((txt, score_text(txt), "pdfplumber"))
         
-        # Try PyMuPDF
         txt = extract_with_pymupdf(file_bytes)
         if txt:
             native_results.append((txt, score_text(txt), "pymupdf"))
         
-        # Try pypdf as fallback
         txt = extract_with_pypdf(file_bytes)
         if txt:
             native_results.append((txt, score_text(txt), "pypdf"))
         
-        # Get best native result
         if native_results:
             best_native = max(native_results, key=lambda x: x[1])
             native_txt, native_score, native_method = best_native
         else:
             native_txt, native_score, native_method = "", 0.0, "none"
         
-        # ALWAYS try OCR for potentially better quality
         ocr_txt, ocr_score = "", 0.0
         print("Running OCR for best quality text extraction...")
         ocr_pdf = force_ocr(file_bytes)
         
         if ocr_pdf:
-            # Extract from OCR'd PDF - try all methods
             ocr_results = []
             
             txt = extract_with_pdfplumber(ocr_pdf)
@@ -80,15 +81,13 @@ class TextProcessor:
             if ocr_results:
                 ocr_txt, ocr_score = max(ocr_results, key=lambda x: x[1])
         
-        # Choose the best result
-        if ocr_score > native_score * 1.1:  # Prefer OCR if it's notably better
+        if ocr_score > native_score * 1.1:
             print(f"Using OCR result (score: {ocr_score:.2f})")
             best_txt = ocr_txt
         else:
             print(f"Using native {native_method} (score: {native_score:.2f})")
             best_txt = native_txt
         
-        # Final check for spacing issues
         if best_txt:
             sample = best_txt[:500]
             words = sample.split()
@@ -96,7 +95,6 @@ class TextProcessor:
                 avg_word_len = sum(len(w) for w in words) / len(words)
                 if avg_word_len > 12:
                     print("Warning: Text may have spacing issues, applying fixes...")
-                    # Try to fix at extraction level
                     best_txt = re.sub(r'([a-z])([A-Z])', r'\1 \2', best_txt)
                     best_txt = re.sub(r'([.!?])([A-Z])', r'\1 \2', best_txt)
         
@@ -104,6 +102,7 @@ class TextProcessor:
 
     # -------- Cleaning --------
 
+    # CORRECT INDENTATION STARTS HERE
     @staticmethod
     def clean_text(
         text: str,
@@ -111,48 +110,36 @@ class TextProcessor:
         remove_bottom_footnotes: bool = True,
     ) -> str:
         """
-        Clean text for TTS.
+        Clean text for TTS using a streamlined and robust pipeline.
         """
         if not text:
             return ""
-        
-        # The cleaning pipeline (simplified since extraction is better)
-        
-        # Fix hyphenation
+
+        # 1. Perform initial structural cleaning on the raw text.
         text = C.fix_line_break_hyphenation(text)
-        
-        # Remove headers if requested
         if remove_running_headers:
-            text = C.remove_page_headers(text)
-            text = C.remove_known_header_lines(text)
-            text = C.remove_all_caps_lines(text)
-        
-        # Remove footnotes if requested
+            text = C.strip_firstline_headers(text)
+
+        # 2. Join lines into paragraphs.
+        text = C.join_paragraphs_smart(text)
+
+        # 3. Remove non-content elements.
         if remove_bottom_footnotes:
             text = C.remove_footnote_markers(text)
-        
-        # Remove quotes
-        text = C.remove_all_quotes(text)
-        
-        # Clean special characters
-        text = C.clean_special_characters(text)
-        
-        # Remove references
         text = C.remove_references(text)
-        
-        # Join paragraphs properly
-        text = C.join_paragraphs_smart(text)
-        
-        # Fix punctuation
+
+        # 4. Clean the actual content.
+        text = C.remove_all_quotes(text)
+        text = C.clean_special_characters(text)
         text = C.fix_punctuation_spacing(text)
         
-        # Normalize whitespace
-        text = C.normalize_whitespace(text)
+        # 5. Perform a final validation check.
+        text = C.validate_and_fix_spacing(text)
         
-        # Final validation
-        text = C.validate_and_fix_spacing(text, len(text))
+        # 6. Finally, flatten the text.
+        text = C.final_flatten(text)
         
-        return text.strip()
+        return text
 
     # -------- Chunking & Stats --------
 

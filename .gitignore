@@ -3,6 +3,8 @@ bilbot-baggins-venv/
 venv/
 env/
 .env
+.venv
+.venv/
 
 # Python
 __pycache__/

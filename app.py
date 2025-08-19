@@ -7,13 +7,13 @@ from pathlib import Path
 import streamlit as st
 from PIL import Image
 import base64
+import time
 
 import edge_tts
 from edge_tts import VoicesManager
 
 from text_processor import TextProcessor
 from textproc.chunking import split_into_sentences
-from textproc import cleaners as C
 
 # --- App identity & theme -----------------------------------------------------
 APP_NAME = "BilBot Baggins"
@@ -76,18 +76,10 @@ def _inject_css():
 
 _inject_css()
 
-# --- Voices: English Neural only ---------------------------------------------
+# --- Voices --------------------------------------------------------------------
 DEFAULT_VOICE = "en-US-AndrewNeural"
-VOICES_FALLBACK = [
-    DEFAULT_VOICE,
-    "en-US-JennyNeural",
-    "en-US-GuyNeural",
-    "en-US-AriaNeural",
-    "en-GB-LibbyNeural",
-    "en-GB-RyanNeural",
-]
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner="Loading voices...")
 def load_english_neural_voices():
     try:
         voices_mgr = asyncio.run(VoicesManager.create())
@@ -96,216 +88,140 @@ def load_english_neural_voices():
         if DEFAULT_VOICE in names:
             names.remove(DEFAULT_VOICE)
             names.insert(0, DEFAULT_VOICE)
-        return names or VOICES_FALLBACK
+        return names
     except Exception:
-        return VOICES_FALLBACK
+        return [DEFAULT_VOICE, "en-US-JennyNeural", "en-US-GuyNeural"]
 
 VOICES = load_english_neural_voices()
 
-# --- Helpers -----------------------------------------------------------------
+# --- Helper Functions --------------------------------------------------------
 def signed(val: int) -> str:
     return f"+{val}" if val >= 0 else str(val)
 
 def pick_chunk_size(text: str) -> int:
-    """
-    Auto-tune chunk length for smoother TTS. Returns value in [1500, 2800].
-    """
     try:
         sents = split_into_sentences(text)
-        if not sents:
-            return 2200
+        if not sents: return 2200
         avg = sum(len(s) for s in sents) / max(1, len(sents))
-        longest = max(len(s) for s in sents)
         size = 2200
-        if longest > 2400:
-            size = 1800
-        elif avg > 300:
-            size = 2000
-        elif avg < 120:
-            size = 2600
+        if max(len(s) for s in sents) > 2400: size = 1800
+        elif avg > 300: size = 2000
+        elif avg < 120: size = 2600
         return max(1500, min(size, 2800))
     except Exception:
         return 2200
 
-async def synthesize_best_quality_mp3_async(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int, volume_pct: int):
+def sanitize_for_tts(text: str) -> str:
+    return text.replace('&', ' and ').replace('<', '').replace('>', '')
+
+async def synthesize_mp3_async(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int, volume_pct: int):
     communicate = edge_tts.Communicate(
-        text=text,
-        voice=voice,
-        rate=f"{signed(rate_pct)}%",
-        pitch=f"{signed(pitch_hz)}Hz",
-        volume=f"{signed(volume_pct)}%",
+        text=text, voice=voice, rate=f"{signed(rate_pct)}%",
+        pitch=f"{signed(pitch_hz)}Hz", volume=f"{signed(volume_pct)}%"
     )
     await communicate.save(out_path)
 
-def synthesize_best_quality_mp3(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int, volume_pct: int):
-    asyncio.run(synthesize_best_quality_mp3_async(text, voice, out_path, rate_pct, pitch_hz, volume_pct))
+# --- UI & State Initialization ------------------------------------------------
+st.session_state.setdefault('last_file_identifier', None)
+st.session_state.setdefault('last_options', None)
+st.session_state.setdefault('chunks', [])
+st.session_state.setdefault('cleaned_text', "")
+st.session_state.setdefault('mp3_bytes', None)
+st.session_state.setdefault('mp3_filename', "")
+st.session_state.setdefault('txt_filename', "")
 
-def check_text_quality(text: str) -> dict:
-    """Check if text has spacing issues."""
-    sample = text[:1000] if len(text) > 1000 else text
-    words = sample.split()
-    avg_word_len = len(sample.replace(" ", "")) / max(1, len(words))
-    
-    return {
-        "words_in_sample": len(words),
-        "avg_word_length": avg_word_len,
-        "has_spacing_issues": avg_word_len > 15,
-        "sample": sample[:200]
-    }
-
-# --- UI ----------------------------------------------------------------------
+# --- Main App Logic -----------------------------------------------------------
 uploaded = st.file_uploader("Upload a PDF or TXT", type=["pdf", "txt"], key="upload")
+
+if not uploaded:
+    st.session_state.clear()
 
 default_idx = VOICES.index(DEFAULT_VOICE) if DEFAULT_VOICE in VOICES else 0
 voice = st.selectbox("Voice", VOICES, index=default_idx, key="voice")
+rate_pct = st.slider("Rate (% change)", -50, 50, 0, 5, key="rate")
+pitch_hz = st.slider("Pitch (Hz change)", -300, 300, 0, 10, key="pitch")
+volume_pct = 0
 
-# Keep user controls for Rate and Pitch
-rate_pct = st.slider("Rate (% change)", min_value=-50, max_value=50, value=0, step=5, key="rate")
-pitch_hz = st.slider("Pitch (Hz change)", min_value=-300, max_value=300, value=0, step=10, key="pitch")
-volume_pct = 0  # fixed for now
+st.write("---")
+st.markdown("##### Text Cleaning Options")
+remove_headers = st.checkbox("Remove running headers/page numbers", value=True, key="rm_hdr")
+remove_footnotes = st.checkbox("Remove footnote markers", value=True, key="rm_foot")
+st.write("---")
 
-# Cleanup options
-with st.expander("⚙️ Text Cleaning Options"):
-    remove_headers = st.checkbox("Remove running headers/page numbers", value=True, key="rm_hdr")
-    remove_footnotes = st.checkbox("Remove footnote markers", value=True, key="rm_foot")
-    debug_mode = st.checkbox("🔍 Show debug info", value=False, key="debug")
-
+current_options = (remove_headers, remove_footnotes)
 if uploaded:
-    data = uploaded.read()
-    ext = Path(uploaded.name).suffix.lower()
+    file_identifier = (uploaded.name, uploaded.size)
+    if file_identifier != st.session_state.last_file_identifier or current_options != st.session_state.last_options:
+        st.session_state.last_file_identifier = file_identifier
+        st.session_state.last_options = current_options
+        st.session_state.mp3_bytes = None
 
-    with st.spinner("Extracting text..."):
-        if ext == ".pdf":
-            raw_text = TextProcessor.read_pdf_file(data)
-        else:
-            raw_text = TextProcessor.read_text_file(data)
+        with st.spinner("Analyzing and cleaning text..."):
+            data = uploaded.read()
+            ext = Path(uploaded.name).suffix.lower()
+            raw_text = TextProcessor.read_pdf_file(data) if ext == ".pdf" else TextProcessor.read_text_file(data)
+            if raw_text == "ERROR: Not a valid PDF file.":
+                st.error("The uploaded file is not a valid PDF. Please check the file and try again.")
+                # Clear state to prevent further action
+                st.session_state.chunks = []
+                st.session_state.cleaned_text = ""
+            else:
+              # continue with cleaning and chunking as normal
+              st.session_state.cleaned_text = TextProcessor.clean_text(
+                raw_text,
+                remove_running_headers=remove_headers,
+                remove_bottom_footnotes=remove_footnotes,
+              )
+            max_chars = pick_chunk_size(st.session_state.cleaned_text)
+            st.session_state.chunks = TextProcessor.smart_split_into_chunks(
+                st.session_state.cleaned_text, max_length=max_chars
+            )
+        st.success(f"Text processed into {len(st.session_state.chunks)} chunks. Ready to generate.")
 
-    # Show extraction quality
-    if debug_mode:
-        st.info(f"📄 Extracted {len(raw_text):,} characters from {uploaded.name}")
-        with st.expander("View raw extracted text (first 1000 chars)"):
-            st.text(raw_text[:1000])
-
-    with st.spinner("Cleaning text for TTS..."):
-        t = TextProcessor.clean_text(
-            raw_text,
-            remove_running_headers=remove_headers,
-            remove_bottom_footnotes=remove_footnotes,
-        )
-
-    # Check text quality
-    quality = check_text_quality(t)
-    
-    if quality["has_spacing_issues"]:
-        st.warning("⚠️ Text may have spacing issues detected!")
-        if debug_mode:
-            st.write(f"- Words in sample: {quality['words_in_sample']}")
-            st.write(f"- Avg word length: {quality['avg_word_length']:.1f} chars")
-            st.text("Sample of cleaned text:")
-            st.code(quality['sample'])
-        
-        # Offer to fix
-        if st.button("🔧 Apply automatic spacing fix"):
-            import re
-            # Emergency fixes
-            t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)
-            t = re.sub(r"([.!?,;:])([A-Za-z])", r"\1 \2", t)
-            t = re.sub(r"(\d)([A-Za-z])", r"\1 \2", t)
-            st.success("Applied spacing fixes!")
-            quality = check_text_quality(t)
-    
-    # Debug view
-    if debug_mode:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.text_area("Original (first 500)", raw_text[:500], height=200, key="orig")
-        with col2:
-            st.text_area("Cleaned (first 500)", t[:500], height=200, key="clean")
-
-    with st.spinner("Chunking on full sentences..."):
-        max_chars = pick_chunk_size(t)
-        chunks = TextProcessor.smart_split_into_chunks(t, max_length=max_chars)
-        st.caption(f"Voice: {voice} · Chunk size: {max_chars} · Chunks: {len(chunks)}")
-
-    # Preview button
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        if st.button("🔊 Preview (30 sec)", key="preview"):
-            preview_text = chunks[0][:400] if chunks else t[:400]
-            with st.spinner("Generating preview..."):
-                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-                    synthesize_best_quality_mp3(
-                        preview_text, voice, tmp.name, 
-                        rate_pct, pitch_hz, volume_pct
-                    )
-                    st.audio(tmp.name, format="audio/mp3")
-                    st.caption("Preview - first 30 seconds")
-
-import time
-
-if st.button("🎧 Generate Audio", key="generate"):
-    started = time.monotonic()
-    total = len(chunks)
-
-    prog = st.progress(0, text="Starting… 0%")
-    with st.status("Preparing to generate audio…", expanded=True) as st_status:
+if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_state.chunks):
+    with st.spinner("Generating audio..."):
+        chunks = st.session_state.chunks
         try:
-            st_status.write(f"📚 Chunks ready: {total} · Voice: {voice} · Rate: {rate_pct}% · Pitch: {pitch_hz}Hz")
-
             with tempfile.TemporaryDirectory() as td:
                 part_paths = []
-
                 for i, ch in enumerate(chunks, 1):
-                    st_status.write(f"🔊 Generating chunk {i}/{total} ({len(ch):,} chars)")
+                    if not ch.strip(): continue
                     part_path = os.path.join(td, f"part_{i:03d}.mp3")
-
-                    synthesize_best_quality_mp3(
-                        ch, voice, part_path,
-                        rate_pct=rate_pct, pitch_hz=pitch_hz, volume_pct=volume_pct
-                    )
+                    safe_chunk = sanitize_for_tts(ch)
+                    asyncio.run(synthesize_mp3_async(
+                        safe_chunk, voice, part_path,
+                        rate_pct, pitch_hz, volume_pct
+                    ))
                     part_paths.append(part_path)
-
-                    frac = i / total
-                    prog.progress(frac, text=f"Generating… {int(frac * 100)}%")
-
-                st_status.write("📎 Merging audio parts…")
                 final_bytes = b"".join(open(p, "rb").read() for p in part_paths)
-
-            elapsed = time.monotonic() - started
-            st_status.update(label=f"✅ Done in {elapsed:.1f}s", state="complete")
-
-            # filenames
-            out_base = Path(uploaded.name).stem
-            mp3_name = f"{out_base}.mp3"
-            clean_name = f"{out_base}.clean.txt"
-
-            # downloads
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button(
-                    "⬇️ Download MP3",
-                    data=final_bytes,
-                    file_name=mp3_name,
-                    mime="audio/mpeg",
-                )
-            with c2:
-                st.download_button(
-                    "⬇️ Download Cleaned Text",
-                    data=t.encode("utf-8"),
-                    file_name=clean_name,
-                    mime="text/plain",
-                )
-
-            st.success(f"Generated {total} chunks in {elapsed:.1f}s")
-            st.caption(f"Voice: {voice} · Rate: {rate_pct}% · Pitch: {pitch_hz}Hz · Chunk size: {max_chars}")
-
+                
+                # --- Store results in session state ---
+                out_base = Path(uploaded.name).stem
+                st.session_state.mp3_bytes = final_bytes
+                # --- CORRECTED FILENAMES ---
+                st.session_state.mp3_filename = f"{out_base}.mp3"
+                st.session_state.txt_filename = f"{out_base}.clean.txt"
+        
         except Exception as e:
-            st_status.update(label="❌ Failed", state="error")
-            st.error(f"Error during generation: {e}")
+            st.error(f"Error on chunk {i}: {e}")
+            st.text_area("Problematic Text", ch, height=200)
+            st.session_state.mp3_bytes = None
 
-    # Stats
-    stats = TextProcessor.get_text_stats(t)
-    st.write(
-        f"**Words:** {stats['words']:,} · **Characters:** {stats['characters']:,} · "
-        f"**Estimated audio:** {stats['estimated_audio_minutes']:.1f} min"
+if st.session_state.mp3_bytes:
+    st.success("✅ Your audiobook is ready!")
+    c1, c2 = st.columns(2)
+    c1.download_button(
+        "⬇️ Download MP3",
+        data=st.session_state.mp3_bytes,
+        file_name=st.session_state.mp3_filename,
+        mime="audio/mpeg"
     )
+    c2.download_button(
+        "⬇️ Download Cleaned Text",
+        data=st.session_state.cleaned_text.encode("utf-8"),
+        file_name=st.session_state.txt_filename,
+        mime="text/plain"
+    )
+    if st.button("🔄 Reset and Start Over"):
+        st.session_state.clear()
+        st.rerun()
