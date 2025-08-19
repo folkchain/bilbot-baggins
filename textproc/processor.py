@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from typing import List, Tuple
+from typing import List
 
 from .extractors import (
     PAGE_BREAK,
@@ -27,14 +27,12 @@ class TextProcessor:
 
     @staticmethod
     def read_pdf_file(file_bytes: bytes) -> str:
-        # Native extraction
         native = []
         for fn in (extract_with_pymupdf, extract_with_pdfplumber, extract_with_pypdf):
             txt = fn(file_bytes)
             native.append((txt, score_text(txt)))
         native_txt, native_score = max(native, key=lambda t: t[1]) if native else ("", 0.0)
 
-        # OCR path
         ocr_txt, ocr_score = "", 0.0
         ocr_pdf = maybe_ocr(file_bytes)
         if ocr_pdf:
@@ -50,55 +48,77 @@ class TextProcessor:
     # -------- Cleaning (TTS‑focused) --------
 
     @staticmethod
-    def clean_text(text: str) -> str:
-        # Page-aware first pass for PDFs
-        text = C.strip_running_headers_and_footers(text)
+    def clean_text(
+        text: str,
+        remove_running_headers: bool = True,
+        remove_bottom_footnotes: bool = True,
+    ) -> str:
+        """
+        Clean for TTS.
+        - remove_running_headers: remove ONLY the first non-empty line per page if header-like (safer).
+        - remove_bottom_footnotes: drop likely footnote blocks near page bottoms.
+        Superscript/endnote markers are ALWAYS removed so they don't get read.
+        """
+        # Page-aware first pass (optional header removal)
+        if remove_running_headers:
+            text = C.strip_firstline_headers(text)
 
-        # 1) Fix linebreak hyphens/dashes/soft hyphens/kiyeok FIRST
+        # Fix hyphen/dash linebreaks before joining
         text = C.normalize_linebreak_hyphens(text)
 
-        # 2) Strip underscores and unreadables/ornamentals
+        # Strip unreadables; keep italics (we don't touch italics anywhere)
         text = C.strip_underscores_and_unreadables(text)
 
-        # 3) Remove all quotation marks, KEEP apostrophes for contractions
+        # Remove all quotes; keep apostrophes
         text = C.strip_all_quotes_keep_apostrophes(text)
 
-        # 4) Remove TOC/headers/footers/page numbers/URLs/emails/citations/markers/captions
+        # Drop URLs/emails/citations/footnote markers/captions
         text = C.remove_unwanted(text)
 
-        # 5) Drop likely footnote blocks at page bottoms
-        text = C.drop_footnotes_at_bottom(text)
+        # Optional: bottom footnotes near page ends
+        if remove_bottom_footnotes:
+            text = C.drop_footnotes_at_bottom(text)
 
-        # 6) Join wrapped lines (after hyphen fix)
+        # Remove known running header leftovers in case they slipped through
+        if remove_running_headers:
+            text = C.remove_known_header_lines(text)
+            text = C.remove_all_caps_lines(text)
+
+        # Join safe single newlines (leave paragraph breaks; final flatten below)
         text = C.join_wrapped_lines(text)
 
-        # 7) Ellipses -> single period
+        # Ellipses -> period
         text = C.normalize_ellipses_to_period(text)
 
-        # 8) Ranges: small numbers to words; larger numeric -> 'to'
+        # Number ranges
         text = C.tts_number_ranges(text)
 
-        # 9) Punctuation shaping for TTS (dashes->commas, colons->commas except times)
+        # Punctuation shaping
         text = C.tts_punctuation_shaping(text)
+        text = C.smooth_article_commas(text)
 
-        # 10) Whitespace & punctuation normalization, collapse blank lines
-        text = C.clean_whitespace_and_punct(text)
+        # NEW: remove hyphens/dashes between words (letter-letter only)
+        text = C.dehyphenate_word_compounds(text)
 
-        # 11) OCR nuisances (spaced letters + digit-in-word fixes, common word fixes)
+        # Ensure missing spaces after punctuation and at digit/letter seams
+        text = C.ensure_punctuation_spacing(text)
+
+        # OCR nuisance fixes
         text = C.ocr_spaced_letters(text)
         text = C.ocr_digit_in_word_fixes(text)
         text = C.ocr_common_word_fixes(text)
 
-        # 12) Acronyms without dots
-        text = C.collapse_dotted_acronyms(text)
+        # Whitespace normalize (pre-flatten)
+        text = C.clean_whitespace_and_punct(text)
 
-        # Remove internal page breaks now that cleanup is done
-        return text.replace(PAGE_BREAK, "\n").strip()
+        # FINAL: flatten to one single paragraph
+        text = C.final_flatten_to_single_paragraph(text)
+        return text
 
     # -------- Chunking & Stats --------
 
     @staticmethod
-    def smart_split_into_chunks(text: str, max_length: int = 2000) -> List[str]:
+    def smart_split_into_chunks(text: str, max_length: int = 2200) -> List[str]:
         return K.smart_split_into_chunks(text, max_length)
 
     @staticmethod

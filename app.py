@@ -1,405 +1,253 @@
-import streamlit as st
+# -*- coding: utf-8 -*-
 import os
-import tempfile
 import asyncio
-import time
-from typing import List, Dict, Any
+import tempfile
+from pathlib import Path
+
+import streamlit as st
+from PIL import Image
+import base64
 
 import edge_tts
+from edge_tts import VoicesManager
+
 from text_processor import TextProcessor
+from textproc.chunking import split_into_sentences
+from textproc import cleaners as C
 
+# --- App identity & theme -----------------------------------------------------
+APP_NAME = "BilBot Baggins"
+LOGO_PATH = Path("assets/bilbot-baggins-logo.png")
 
-class AudioConfig:
-    """Configuration settings for the audiobook generator"""
-    MAX_CHUNK_LENGTH = 2000
-    BATCH_SIZE = 5
-    SUPPORTED_FORMATS = ["txt", "pdf"]
-    DEFAULT_VOICE = "en-US-AndrewNeural"
-    TEMP_DIR_PREFIX = "audiobook_"
-    MAX_RETRIES = 3
-    
-    QUALITY_SETTINGS = {
-        "Fast (Lower Quality)": {"chunk_size": 3000, "rate_modifier": "+10%"},
-        "Balanced": {"chunk_size": 2000, "rate_modifier": "0%"},
-        "High Quality (Slower)": {"chunk_size": 1500, "rate_modifier": "-10%"}
-    }
+_logo_img = Image.open(LOGO_PATH)
+st.set_page_config(
+    page_title=f"{APP_NAME} - Audiobook",
+    page_icon=_logo_img,
+    layout="centered",
+)
 
+def _inject_css():
+    with open(LOGO_PATH, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
 
-class AudioBookGenerator:
-    """Main class for generating audiobooks"""
-    
-    def __init__(self):
-        self.text_processor = TextProcessor()
-        self._init_session_state()
-    
-    def _init_session_state(self):
-        """Initialize session state variables"""
-        session_vars = {
-            'processed_text': None,
-            'audio_data': None,
-            'download_filename': None,
-            'text_stats': None,
-            'processing_complete': False
-        }
-        
-        for var, default in session_vars.items():
-            if var not in st.session_state:
-                st.session_state[var] = default
+    css = f"""
+    <style>
+      .stApp {{
+        background: linear-gradient(180deg, #F4EEDA 0%, #EFE7CC 100%);
+        color: #2E2A22;
+      }}
+      .bilbot-hero {{
+        display:flex; align-items:center; gap:16px; margin: 4px 0 12px 0;
+        padding: 12px 16px; border-radius: 16px;
+        background: #EFE7CC; border: 2px solid #D7CCAA;
+        box-shadow: 0 4px 14px rgba(60, 55, 45, 0.08);
+      }}
+      .bilbot-hero img {{
+        width: 72px; height: 72px; border-radius: 16px; border: 2px solid #3A2F21;
+      }}
+      .bilbot-title {{
+        font-family: Georgia, 'Times New Roman', serif;
+        font-weight: 700; font-size: 28px; line-height: 1.1; margin: 0;
+        color: #2E2A22;
+      }}
+      .bilbot-sub {{
+        margin: 2px 0 0 0; color: #4A7C59; font-size: 14px;
+      }}
+      section[data-testid="stSidebar"] > div {{ background: #EFE7CC; }}
+      .stButton>button, .stDownloadButton>button {{
+        border-radius: 12px; padding: 10px 16px; border: 2px solid #3A2F21;
+        background:#4A7C59; color:#F4EEDA; font-weight:600;
+      }}
+      .stButton>button:hover, .stDownloadButton>button:hover {{ filter: brightness(1.05); }}
+      .stSelectbox div[data-baseweb="select"] > div {{
+        border-radius: 12px; border: 2px solid #3A2F21;
+      }}
+      pre, code, .stText {{ color: #2E2A22; }}
+    </style>
+    <div class="bilbot-hero">
+      <img src="data:image/png;base64,{b64}" alt="BilBot Baggins logo"/>
+      <div>
+        <h1 class="bilbot-title">BilBot Baggins</h1>
+        <div class="bilbot-sub">Convert TXT and PDF into MP3 audiobooks with AI voices.</div>
+      </div>
+    </div>
+    """
+    st.markdown(css, unsafe_allow_html=True)
 
-    @st.cache_data
-    def get_available_voices(_self):
-        """Get list of US English Male Neural voices"""
-        try:
-            voices = asyncio.run(edge_tts.list_voices())
-            us_male_voices = [
-                v for v in voices 
-                if (v.get("Locale", "").startswith("en-US") and 
-                    "Neural" in v.get("ShortName", "") and
-                    v.get("Gender", "").lower() == "male")
-            ]
-            return sorted(us_male_voices, key=lambda x: x.get("ShortName", ""))
-        except Exception as e:
-            st.error(f"Error getting voices: {e}")
-            return []
+_inject_css()
 
-    async def generate_speech_with_retry(self, text: str, voice: str, rate: str, pitch: str, output_file: str) -> bool:
-        """Generate speech with retry logic"""
-        for attempt in range(AudioConfig.MAX_RETRIES):
-            try:
-                communicate = edge_tts.Communicate(
-                    text=text, 
-                    voice=voice, 
-                    rate=rate, 
-                    pitch=pitch
-                )
-                await communicate.save(output_file)
-                return os.path.exists(output_file) and os.path.getsize(output_file) > 0
-            except Exception as e:
-                if attempt == AudioConfig.MAX_RETRIES - 1:
-                    st.error(f"Failed after {AudioConfig.MAX_RETRIES} attempts: {e}")
-                    return False
-                st.warning(f"Attempt {attempt + 1} failed, retrying in 1 second...")
-                await asyncio.sleep(1)
-        return False
+# --- Voices: English Neural only ---------------------------------------------
+DEFAULT_VOICE = "en-US-AndrewNeural"
+VOICES_FALLBACK = [
+    DEFAULT_VOICE,
+    "en-US-JennyNeural",
+    "en-US-GuyNeural",
+    "en-US-AriaNeural",
+    "en-GB-LibbyNeural",
+    "en-GB-RyanNeural",
+]
 
-    def combine_audio_files(self, file_list: List[str]) -> bytes:
-        """Combine multiple MP3 files into one"""
-        combined_data = b""
-        
-        for file_path in file_list:
-            try:
-                with open(file_path, 'rb') as f:
-                    mp3_data = f.read()
-                    combined_data += mp3_data
-            except Exception as e:
-                st.error(f"Error reading audio file {file_path}: {e}")
-        
-        return combined_data
+@st.cache_resource(show_spinner=False)
+def load_english_neural_voices():
+    try:
+        voices_mgr = asyncio.run(VoicesManager.create())
+        en_voices = voices_mgr.find(Language="en")
+        names = sorted({v["ShortName"] for v in en_voices if "Neural" in v["ShortName"]})
+        if DEFAULT_VOICE in names:
+            names.remove(DEFAULT_VOICE)
+            names.insert(0, DEFAULT_VOICE)
+        return names or VOICES_FALLBACK
+    except Exception:
+        return VOICES_FALLBACK
 
-    def show_progress_with_eta(self, current: int, total: int, start_time: float):
-        """Show progress with estimated time remaining"""
-        progress = current / total if total > 0 else 0
-        elapsed = time.time() - start_time
-        eta = (elapsed / progress - elapsed) if progress > 0 else 0
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Progress", f"{current}/{total}")
-        with col2:
-            st.metric("Elapsed", f"{elapsed:.1f}s")
-        with col3:
-            st.metric("ETA", f"{eta:.1f}s" if eta < 3600 else f"{eta/60:.1f}m")
+VOICES = load_english_neural_voices()
 
-    async def generate_voice_sample(self, voice: str, rate: int, pitch: int) -> bytes:
-        """Generate a voice sample for preview"""
-        sample_text = "Hello! This is how this voice sounds. Would you like to use this voice for your audiobook?"
-        
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
-            try:
-                success = await self.generate_speech_with_retry(
-                    sample_text, voice, f"{rate:+d}%", f"{pitch:+d}Hz", temp_file.name
-                )
-                if success:
-                    with open(temp_file.name, 'rb') as f:
-                        audio_data = f.read()
-                    return audio_data
-            finally:
-                if os.path.exists(temp_file.name):
-                    os.unlink(temp_file.name)
-        return b""
+# --- Helpers -----------------------------------------------------------------
+def signed(val: int) -> str:
+    return f"+{val}" if val >= 0 else str(val)
 
-    async def generate_audiobook(self, uploaded_file, voice: str, rate: int, pitch: int, 
-                               clean_text: bool, quality_setting: str) -> bool:
-        """Process file and generate audiobook in one step"""
-        try:
-            # Step 1: Read and process file
-            with st.spinner("Reading and processing file..."):
-                file_content = uploaded_file.read()
-                filename = uploaded_file.name
-                
-                if filename.lower().endswith(".txt"):
-                    text_content = self.text_processor.read_text_file(file_content)
-                else:
-                    text_content = self.text_processor.read_pdf_file(file_content)
-            
-            if not text_content.strip():
-                st.error("No text found in the file. For PDFs, make sure it contains selectable text, not just images.")
-                return False
-            
-            # Step 2: Clean text if requested
-            if clean_text:
-                with st.spinner("Cleaning text..."):
-                    text_content = self.text_processor.clean_text(text_content)
-            
-            # Step 3: Get chunk size and split text
-            chunk_size = AudioConfig.QUALITY_SETTINGS[quality_setting]["chunk_size"]
-            text_chunks = self.text_processor.smart_split_into_chunks(text_content, chunk_size)
-            
-            if not text_chunks:
-                st.error("No text chunks to process. The text might be too short or empty after cleaning.")
-                return False
-            
-            # Store processed text and stats for preview/download
-            st.session_state.processed_text = text_content
-            st.session_state.text_stats = self.text_processor.get_text_stats(text_content)
-            
-            # Show processing results
-            stats = st.session_state.text_stats
-            st.success(f"✅ Processed {stats['characters']:,} characters ({stats['words']:,} words) into {len(text_chunks)} audio chunks")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Estimated Reading Time", f"{stats['reading_time_minutes']:.1f} min")
-            with col2:
-                st.metric("Estimated Audio Length", f"{stats['estimated_audio_minutes']:.1f} min")
-            with col3:
-                st.metric("Audio Chunks", len(text_chunks))
-            
-            # Step 4: Generate audio
-            temp_files = []
-            temp_dir = tempfile.mkdtemp(prefix=AudioConfig.TEMP_DIR_PREFIX)
-            
-            try:
-                st.info("🎙️ Starting audio generation...")
-                progress_bar = st.progress(0)
-                status_container = st.container()
-                
-                start_time = time.time()
-                
-                # Generate audio for each chunk
-                for i, chunk in enumerate(text_chunks):
-                    if not chunk.strip():
-                        continue
-                    
-                    with status_container:
-                        st.text(f"🎵 Generating audio for chunk {i+1} of {len(text_chunks)}...")
-                        self.show_progress_with_eta(i, len(text_chunks), start_time)
-                    
-                    temp_file = os.path.join(temp_dir, f"chunk_{i:03d}.mp3")
-                    
-                    # Generate speech
-                    success = await self.generate_speech_with_retry(
-                        chunk, voice, f"{rate:+d}%", f"{pitch:+d}Hz", temp_file
-                    )
-                    
-                    if success:
-                        temp_files.append(temp_file)
-                        st.write(f"✅ Chunk {i+1} completed ({len(chunk)} characters)")
-                    else:
-                        st.warning(f"⚠️ Failed to generate chunk {i+1}")
-                    
-                    progress_bar.progress((i + 1) / len(text_chunks))
-                
-                if not temp_files:
-                    st.error("❌ No audio files were generated successfully.")
-                    return False
-                
-                # Step 5: Combine audio files
-                status_container.text("🔗 Combining audio files...")
-                final_audio = self.combine_audio_files(temp_files)
-                
-                if not final_audio:
-                    st.error("❌ Failed to combine audio files.")
-                    return False
-                
-                # Store results
-                base_filename = os.path.splitext(filename)[0]
-                download_filename = f"{base_filename}_audiobook_{voice}.mp3"
-                
-                st.session_state.audio_data = final_audio
-                st.session_state.download_filename = download_filename
-                st.session_state.processing_complete = True
-                
-                # Clear progress indicators
-                progress_bar.empty()
-                status_container.empty()
-                
-                # Show audio preview
-                if temp_files:
-                    with st.expander("🔊 Audio Preview (First Chunk)", expanded=False):
-                        with open(temp_files[0], 'rb') as f:
-                            st.audio(f.read(), format='audio/mp3')
-                
-                st.success("🎉 Audiobook generated successfully!")
-                st.info(f"📊 Generated {len(temp_files)} audio segments totaling {len(final_audio):,} bytes")
-                
-                return True
-                
-            finally:
-                # Clean up temp files
-                for temp_file in temp_files:
-                    try:
-                        if os.path.exists(temp_file):
-                            os.remove(temp_file)
-                    except:
-                        pass
-                try:
-                    if os.path.exists(temp_dir):
-                        os.rmdir(temp_dir)
-                except:
-                    pass
-            
-        except Exception as e:
-            st.error(f"❌ Error generating audio: {str(e)}")
-            return False
+def pick_chunk_size(text: str) -> int:
+    """
+    Auto-tune chunk length for smoother TTS. Returns value in [1500, 2800].
+    """
+    try:
+        sents = split_into_sentences(text)
+        if not sents:
+            return 2200
+        avg = sum(len(s) for s in sents) / max(1, len(sents))
+        longest = max(len(s) for s in sents)
+        size = 2200
+        if longest > 2400:
+            size = 1800
+        elif avg > 300:
+            size = 2000
+        elif avg < 120:
+            size = 2600
+        return max(1500, min(size, 2800))
+    except Exception:
+        return 2200
 
-
-def main():
-    """Main Streamlit application"""
-    st.set_page_config(
-        page_title="Text to Audio Converter", 
-        page_icon="🎧", 
-        layout="centered"
+async def synthesize_best_quality_mp3_async(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int, volume_pct: int):
+    communicate = edge_tts.Communicate(
+        text=text,
+        voice=voice,
+        rate=f"{signed(rate_pct)}%",
+        pitch=f"{signed(pitch_hz)}Hz",
+        volume=f"{signed(volume_pct)}%",
     )
-    
-    st.title("🎧 Text to Audio Converter")
-    st.write("Convert your text files or PDFs into MP3 audiobooks using US English male AI voices!")
-    
-    # Initialize generator
-    generator = AudioBookGenerator()
-    
-    # File upload
-    uploaded_file = st.file_uploader(
-        "Upload a text file or PDF", 
-        type=AudioConfig.SUPPORTED_FORMATS,
-        help="Choose a .txt file or PDF to convert to audio"
-    )
-    
-    if uploaded_file:
-        # Voice selection
-        voices = generator.get_available_voices()
-        if not voices:
-            st.error("Could not load voice list. Please refresh the page.")
-            st.stop()
-        
-        voice_options = [v.get("ShortName") for v in voices]
-        st.write(f"**Available voices:** {len(voice_options)} US English Male Neural voices")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            selected_voice = st.selectbox(
-                "Choose a male voice", 
-                voice_options,
-                index=voice_options.index(AudioConfig.DEFAULT_VOICE) if AudioConfig.DEFAULT_VOICE in voice_options else 0
-            )
-        
-        with col2:
-            if st.button("🎵 Preview Voice"):
-                with st.spinner("Generating voice sample..."):
-                    sample_audio = asyncio.run(generator.generate_voice_sample(selected_voice, 0, 0))
-                    if sample_audio:
-                        st.audio(sample_audio, format='audio/mp3')
-        
-        # Voice settings
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            speech_rate = st.slider("Speech Rate", -50, 50, 0, help="Negative = slower, Positive = faster")
-        with col2:
-            speech_pitch = st.slider("Pitch", -20, 20, 0, help="Negative = lower, Positive = higher")
-        with col3:
-            quality_setting = st.selectbox(
-                "Quality Setting", 
-                list(AudioConfig.QUALITY_SETTINGS.keys()), 
-                index=1,
-                help="Higher quality = slower processing but better results"
-            )
-        
-        # Options
-        col1, col2 = st.columns(2)
-        with col1:
-            clean_whitespace = st.checkbox("Clean up text formatting", value=True, 
-                help="Removes OCR errors, fixes spacing, handles quotes, and cleans up hyphenation issues")
-        with col2:
-            show_preview = st.checkbox("Show text preview", value=False,
-                help="Preview and download the processed text after generation")
-        
-        # Generate audiobook button
-        if st.button("🎵 Generate Audiobook", type="primary"):
-            asyncio.run(generator.generate_audiobook(
-                uploaded_file, selected_voice, speech_rate, speech_pitch, clean_whitespace, quality_setting
-            ))
-    
-    # Show text preview and download if available (after generation)
-    if st.session_state.processed_text and show_preview and st.session_state.processing_complete:
-        with st.expander("📄 Text Preview & Download", expanded=True):
-            st.markdown("**Text Statistics:**")
-            if st.session_state.text_stats:
-                stats = st.session_state.text_stats
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Characters", f"{stats['characters']:,}")
-                with col2:
-                    st.metric("Words", f"{stats['words']:,}")
-                with col3:
-                    st.metric("Paragraphs", stats['paragraphs'])
-            
-            st.markdown("**Text Preview (first 500 characters):**")
-            preview_text = st.session_state.processed_text[:500] + "..." if len(st.session_state.processed_text) > 500 else st.session_state.processed_text
-            st.text_area("Preview", preview_text, height=150, disabled=True)
-            
-            # Download processed text
-            if uploaded_file:
-                base_filename = os.path.splitext(uploaded_file.name)[0]
-                processed_filename = f"{base_filename}_processed.txt"
-                
-                st.download_button(
-                    label="📥 Download Processed Text",
-                    data=st.session_state.processed_text.encode('utf-8'),
-                    file_name=processed_filename,
-                    mime="text/plain",
-                    key="download_text"
-                )
-    
-    # Show audio download if available
-    if st.session_state.audio_data:
-        st.success("🎉 Audiobook ready for download!")
-        
-        st.download_button(
-            label="📥 Download MP3 Audiobook",
-            data=st.session_state.audio_data,
-            file_name=st.session_state.download_filename,
-            mime="audio/mpeg",
-            type="primary",
-            key="download_audio"
+    await communicate.save(out_path)  # newer edge-tts infers MP3 from ".mp3"
+
+def synthesize_best_quality_mp3(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int, volume_pct: int):
+    asyncio.run(synthesize_best_quality_mp3_async(text, voice, out_path, rate_pct, pitch_hz, volume_pct))
+
+# --- UI ----------------------------------------------------------------------
+uploaded = st.file_uploader("Upload a PDF or TXT", type=["pdf", "txt"], key="upload")
+
+default_idx = VOICES.index(DEFAULT_VOICE) if DEFAULT_VOICE in VOICES else 0
+voice = st.selectbox("Voice", VOICES, index=default_idx, key="voice")
+
+# Keep user controls for Rate and Pitch (and Volume quietly, default 0)
+rate_pct = st.slider("Rate (% change)", min_value=-50, max_value=50, value=0, step=5, key="rate")
+pitch_hz = st.slider("Pitch (Hz change)", min_value=-300, max_value=300, value=0, step=10, key="pitch")
+volume_pct = 0  # fixed for now; easy to expose later if you want
+
+# Cleanup options the user asked to keep
+remove_headers = st.checkbox("Remove running headers (first line per page if header-like)", value=True, key="rm_hdr")
+remove_footnotes = st.checkbox("Remove likely bottom footnotes", value=True, key="rm_foot")
+
+if uploaded:
+    data = uploaded.read()
+    ext = Path(uploaded.name).suffix.lower()
+
+    with st.spinner("Extracting text..."):
+        if ext == ".pdf":
+            raw_text = TextProcessor.read_pdf_file(data)
+        else:
+            raw_text = TextProcessor.read_text_file(data)
+
+    with st.spinner("Cleaning text for TTS..."):
+        # Run the TTS-focused cleaning with user-selected options
+        t = TextProcessor.clean_text(
+            raw_text,
+            remove_running_headers=remove_headers,
+            remove_bottom_footnotes=remove_footnotes,
         )
-        
-        # Option to clear and start over
-        if st.button("🔄 Start Over"):
-            # Clear session state
-            for key in ['processed_text', 'audio_data', 'download_filename', 'text_stats', 'processing_complete']:
-                st.session_state[key] = None
-            st.rerun()
-    
-    # Show tips only when no file is uploaded
-    if not uploaded_file:
-        st.markdown("---")
-        st.markdown("**Tips:**")
-        st.markdown("• Upload a text file or PDF to get started")
-        st.markdown("• Use voice preview to test different voices")
-        st.markdown("• Higher quality settings take longer but produce better results")
-        st.markdown("• Text cleaning fixes common OCR and formatting issues")
-        st.markdown("• Large files may take several minutes to process")
+        # Ensure final flatten and a couple of safety passes
+        t = C.remove_all_caps_lines(t)
+        t = C.remove_known_header_lines(t)
+        t = C.final_flatten_to_single_paragraph(t)
 
-if __name__ == "__main__":
-    main()
+    with st.spinner("Chunking on full sentences..."):
+        max_chars = pick_chunk_size(t)
+        chunks = TextProcessor.smart_split_into_chunks(t, max_length=max_chars)
+        st.caption(f"Voice: {voice} · Chunk size: {max_chars} · Chunks: {len(chunks)}")
+
+import time
+
+if st.button("🎧 Generate Audio", key="generate"):
+    started = time.monotonic()
+    total = len(chunks)
+
+    prog = st.progress(0, text="Starting… 0%")
+    with st.status("Preparing to generate audio…", expanded=True) as st_status:
+        try:
+            st_status.write(f"📚 Chunks ready: {total} · Voice: {voice} · Rate: {rate_pct}% · Pitch: {pitch_hz}Hz")
+
+            with tempfile.TemporaryDirectory() as td:
+                part_paths = []
+
+                for i, ch in enumerate(chunks, 1):
+                    st_status.write(f"🔊 Generating chunk {i}/{total} ({len(ch):,} chars)")
+                    part_path = os.path.join(td, f"part_{i:03d}.mp3")
+
+                    # actual TTS
+                    synthesize_best_quality_mp3(
+                        ch, voice, part_path,
+                        rate_pct=rate_pct, pitch_hz=pitch_hz, volume_pct=volume_pct
+                    )
+                    part_paths.append(part_path)
+
+                    frac = i / total
+                    prog.progress(frac, text=f"Generating… {int(frac * 100)}%")
+
+                st_status.write("📎 Merging audio parts…")
+                final_bytes = b"".join(open(p, "rb").read() for p in part_paths)
+
+            elapsed = time.monotonic() - started
+            st_status.update(label=f"✅ Done in {elapsed:.1f}s", state="complete")
+
+            # filenames
+            out_base = Path(uploaded.name).stem
+            mp3_name = f"{out_base}.mp3"
+            clean_name = f"{out_base}.clean.txt"
+
+            # downloads: MP3 + cleaned text
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button(
+                    "⬇️ Download MP3",
+                    data=final_bytes,
+                    file_name=mp3_name,
+                    mime="audio/mpeg",
+                )
+            with c2:
+                st.download_button(
+                    "⬇️ Download Cleaned Text (.txt)",
+                    data=t.encode("utf-8"),
+                    file_name=clean_name,
+                    mime="text/plain",
+                )
+
+            st.success(f"Generated {total} chunks in {elapsed:.1f}s")
+            st.caption(f"Voice: {voice} · Rate: {rate_pct}% · Pitch: {pitch_hz}Hz · Chunk size: {max_chars}")
+
+        except Exception as e:
+            st_status.update(label="❌ Failed", state="error")
+            st.error(f"Error during generation: {e}")
+
+    # Stats
+    stats = TextProcessor.get_text_stats(t)
+    st.write(
+        f"**Words:** {stats['words']:,} · **Characters:** {stats['characters']:,} · "
+        f"**Estimated audio:** {stats['estimated_audio_minutes']:.1f} min"
+    )
