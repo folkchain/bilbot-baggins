@@ -2,3 +2,4 @@ streamlit
 edge-tts
 pypdf
 pdfplumber
+PyMuPDF

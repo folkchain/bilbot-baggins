@@ -260,19 +260,19 @@ class AudioBookGenerator:
                     pass
             
         except Exception as e:
-            st.error(f"❌ Error generating audiobook: {str(e)}")
+            st.error(f"❌ Error generating audio: {str(e)}")
             return False
 
 
 def main():
     """Main Streamlit application"""
     st.set_page_config(
-        page_title="Text to Audiobook Converter", 
+        page_title="Text to Audio Converter", 
         page_icon="🎧", 
         layout="centered"
     )
     
-    st.title("🎧 Text to Audiobook Converter")
+    st.title("🎧 Text to Audio Converter")
     st.write("Convert your text files or PDFs into MP3 audiobooks using US English male AI voices!")
     
     # Initialize generator
@@ -282,7 +282,7 @@ def main():
     uploaded_file = st.file_uploader(
         "Upload a text file or PDF", 
         type=AudioConfig.SUPPORTED_FORMATS,
-        help="Choose a .txt file or searchable PDF to convert to audio"
+        help="Choose a .txt file or PDF to convert to audio"
     )
     
     if uploaded_file:
