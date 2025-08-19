@@ -135,10 +135,23 @@ async def synthesize_best_quality_mp3_async(text: str, voice: str, out_path: str
         pitch=f"{signed(pitch_hz)}Hz",
         volume=f"{signed(volume_pct)}%",
     )
-    await communicate.save(out_path)  # newer edge-tts infers MP3 from ".mp3"
+    await communicate.save(out_path)
 
 def synthesize_best_quality_mp3(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int, volume_pct: int):
     asyncio.run(synthesize_best_quality_mp3_async(text, voice, out_path, rate_pct, pitch_hz, volume_pct))
+
+def check_text_quality(text: str) -> dict:
+    """Check if text has spacing issues."""
+    sample = text[:1000] if len(text) > 1000 else text
+    words = sample.split()
+    avg_word_len = len(sample.replace(" ", "")) / max(1, len(words))
+    
+    return {
+        "words_in_sample": len(words),
+        "avg_word_length": avg_word_len,
+        "has_spacing_issues": avg_word_len > 15,
+        "sample": sample[:200]
+    }
 
 # --- UI ----------------------------------------------------------------------
 uploaded = st.file_uploader("Upload a PDF or TXT", type=["pdf", "txt"], key="upload")
@@ -146,14 +159,16 @@ uploaded = st.file_uploader("Upload a PDF or TXT", type=["pdf", "txt"], key="upl
 default_idx = VOICES.index(DEFAULT_VOICE) if DEFAULT_VOICE in VOICES else 0
 voice = st.selectbox("Voice", VOICES, index=default_idx, key="voice")
 
-# Keep user controls for Rate and Pitch (and Volume quietly, default 0)
+# Keep user controls for Rate and Pitch
 rate_pct = st.slider("Rate (% change)", min_value=-50, max_value=50, value=0, step=5, key="rate")
 pitch_hz = st.slider("Pitch (Hz change)", min_value=-300, max_value=300, value=0, step=10, key="pitch")
-volume_pct = 0  # fixed for now; easy to expose later if you want
+volume_pct = 0  # fixed for now
 
-# Cleanup options the user asked to keep
-remove_headers = st.checkbox("Remove running headers (first line per page if header-like)", value=True, key="rm_hdr")
-remove_footnotes = st.checkbox("Remove likely bottom footnotes", value=True, key="rm_foot")
+# Cleanup options
+with st.expander("⚙️ Text Cleaning Options"):
+    remove_headers = st.checkbox("Remove running headers/page numbers", value=True, key="rm_hdr")
+    remove_footnotes = st.checkbox("Remove footnote markers", value=True, key="rm_foot")
+    debug_mode = st.checkbox("🔍 Show debug info", value=False, key="debug")
 
 if uploaded:
     data = uploaded.read()
@@ -165,22 +180,66 @@ if uploaded:
         else:
             raw_text = TextProcessor.read_text_file(data)
 
+    # Show extraction quality
+    if debug_mode:
+        st.info(f"📄 Extracted {len(raw_text):,} characters from {uploaded.name}")
+        with st.expander("View raw extracted text (first 1000 chars)"):
+            st.text(raw_text[:1000])
+
     with st.spinner("Cleaning text for TTS..."):
-        # Run the TTS-focused cleaning with user-selected options
         t = TextProcessor.clean_text(
             raw_text,
             remove_running_headers=remove_headers,
             remove_bottom_footnotes=remove_footnotes,
         )
-        # Ensure final flatten and a couple of safety passes
-        t = C.remove_all_caps_lines(t)
-        t = C.remove_known_header_lines(t)
-        t = C.final_flatten_to_single_paragraph(t)
+
+    # Check text quality
+    quality = check_text_quality(t)
+    
+    if quality["has_spacing_issues"]:
+        st.warning("⚠️ Text may have spacing issues detected!")
+        if debug_mode:
+            st.write(f"- Words in sample: {quality['words_in_sample']}")
+            st.write(f"- Avg word length: {quality['avg_word_length']:.1f} chars")
+            st.text("Sample of cleaned text:")
+            st.code(quality['sample'])
+        
+        # Offer to fix
+        if st.button("🔧 Apply automatic spacing fix"):
+            import re
+            # Emergency fixes
+            t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)
+            t = re.sub(r"([.!?,;:])([A-Za-z])", r"\1 \2", t)
+            t = re.sub(r"(\d)([A-Za-z])", r"\1 \2", t)
+            st.success("Applied spacing fixes!")
+            quality = check_text_quality(t)
+    
+    # Debug view
+    if debug_mode:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.text_area("Original (first 500)", raw_text[:500], height=200, key="orig")
+        with col2:
+            st.text_area("Cleaned (first 500)", t[:500], height=200, key="clean")
 
     with st.spinner("Chunking on full sentences..."):
         max_chars = pick_chunk_size(t)
         chunks = TextProcessor.smart_split_into_chunks(t, max_length=max_chars)
         st.caption(f"Voice: {voice} · Chunk size: {max_chars} · Chunks: {len(chunks)}")
+
+    # Preview button
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if st.button("🔊 Preview (30 sec)", key="preview"):
+            preview_text = chunks[0][:400] if chunks else t[:400]
+            with st.spinner("Generating preview..."):
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                    synthesize_best_quality_mp3(
+                        preview_text, voice, tmp.name, 
+                        rate_pct, pitch_hz, volume_pct
+                    )
+                    st.audio(tmp.name, format="audio/mp3")
+                    st.caption("Preview - first 30 seconds")
 
 import time
 
@@ -200,7 +259,6 @@ if st.button("🎧 Generate Audio", key="generate"):
                     st_status.write(f"🔊 Generating chunk {i}/{total} ({len(ch):,} chars)")
                     part_path = os.path.join(td, f"part_{i:03d}.mp3")
 
-                    # actual TTS
                     synthesize_best_quality_mp3(
                         ch, voice, part_path,
                         rate_pct=rate_pct, pitch_hz=pitch_hz, volume_pct=volume_pct
@@ -221,7 +279,7 @@ if st.button("🎧 Generate Audio", key="generate"):
             mp3_name = f"{out_base}.mp3"
             clean_name = f"{out_base}.clean.txt"
 
-            # downloads: MP3 + cleaned text
+            # downloads
             c1, c2 = st.columns(2)
             with c1:
                 st.download_button(
@@ -232,7 +290,7 @@ if st.button("🎧 Generate Audio", key="generate"):
                 )
             with c2:
                 st.download_button(
-                    "⬇️ Download Cleaned Text (.txt)",
+                    "⬇️ Download Cleaned Text",
                     data=t.encode("utf-8"),
                     file_name=clean_name,
                     mime="text/plain",

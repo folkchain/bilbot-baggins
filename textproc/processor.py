@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from typing import List
+import re
 
 from .extractors import (
     PAGE_BREAK,
@@ -7,7 +8,7 @@ from .extractors import (
     extract_with_pymupdf,
     extract_with_pdfplumber,
     extract_with_pypdf,
-    maybe_ocr,
+    force_ocr,
 )
 from . import cleaners as C
 from . import chunking as K
@@ -27,25 +28,81 @@ class TextProcessor:
 
     @staticmethod
     def read_pdf_file(file_bytes: bytes) -> str:
-        native = []
-        for fn in (extract_with_pymupdf, extract_with_pdfplumber, extract_with_pypdf):
-            txt = fn(file_bytes)
-            native.append((txt, score_text(txt)))
-        native_txt, native_score = max(native, key=lambda t: t[1]) if native else ("", 0.0)
-
+        """
+        Enhanced PDF reading that prioritizes OCR for better quality.
+        """
+        # First, try native extraction methods
+        native_results = []
+        
+        # Try pdfplumber with layout mode first (often best for spacing)
+        txt = extract_with_pdfplumber(file_bytes)
+        if txt:
+            native_results.append((txt, score_text(txt), "pdfplumber"))
+        
+        # Try PyMuPDF
+        txt = extract_with_pymupdf(file_bytes)
+        if txt:
+            native_results.append((txt, score_text(txt), "pymupdf"))
+        
+        # Try pypdf as fallback
+        txt = extract_with_pypdf(file_bytes)
+        if txt:
+            native_results.append((txt, score_text(txt), "pypdf"))
+        
+        # Get best native result
+        if native_results:
+            best_native = max(native_results, key=lambda x: x[1])
+            native_txt, native_score, native_method = best_native
+        else:
+            native_txt, native_score, native_method = "", 0.0, "none"
+        
+        # ALWAYS try OCR for potentially better quality
         ocr_txt, ocr_score = "", 0.0
-        ocr_pdf = maybe_ocr(file_bytes)
+        print("Running OCR for best quality text extraction...")
+        ocr_pdf = force_ocr(file_bytes)
+        
         if ocr_pdf:
-            for fn in (extract_with_pymupdf, extract_with_pdfplumber, extract_with_pypdf):
-                ocr_txt = fn(ocr_pdf)
-                if ocr_txt:
-                    break
-            ocr_score = score_text(ocr_txt)
-
-        best_txt = native_txt if native_score >= ocr_score else ocr_txt
+            # Extract from OCR'd PDF - try all methods
+            ocr_results = []
+            
+            txt = extract_with_pdfplumber(ocr_pdf)
+            if txt:
+                ocr_results.append((txt, score_text(txt)))
+            
+            txt = extract_with_pymupdf(ocr_pdf)
+            if txt:
+                ocr_results.append((txt, score_text(txt)))
+            
+            txt = extract_with_pypdf(ocr_pdf)
+            if txt:
+                ocr_results.append((txt, score_text(txt)))
+            
+            if ocr_results:
+                ocr_txt, ocr_score = max(ocr_results, key=lambda x: x[1])
+        
+        # Choose the best result
+        if ocr_score > native_score * 1.1:  # Prefer OCR if it's notably better
+            print(f"Using OCR result (score: {ocr_score:.2f})")
+            best_txt = ocr_txt
+        else:
+            print(f"Using native {native_method} (score: {native_score:.2f})")
+            best_txt = native_txt
+        
+        # Final check for spacing issues
+        if best_txt:
+            sample = best_txt[:500]
+            words = sample.split()
+            if words:
+                avg_word_len = sum(len(w) for w in words) / len(words)
+                if avg_word_len > 12:
+                    print("Warning: Text may have spacing issues, applying fixes...")
+                    # Try to fix at extraction level
+                    best_txt = re.sub(r'([a-z])([A-Z])', r'\1 \2', best_txt)
+                    best_txt = re.sub(r'([.!?])([A-Z])', r'\1 \2', best_txt)
+        
         return best_txt.strip()
 
-    # -------- Cleaning (TTS‑focused) --------
+    # -------- Cleaning --------
 
     @staticmethod
     def clean_text(
@@ -54,66 +111,48 @@ class TextProcessor:
         remove_bottom_footnotes: bool = True,
     ) -> str:
         """
-        Clean for TTS.
-        - remove_running_headers: remove ONLY the first non-empty line per page if header-like (safer).
-        - remove_bottom_footnotes: drop likely footnote blocks near page bottoms.
-        Superscript/endnote markers are ALWAYS removed so they don't get read.
+        Clean text for TTS.
         """
-        # Page-aware first pass (optional header removal)
+        if not text:
+            return ""
+        
+        # The cleaning pipeline (simplified since extraction is better)
+        
+        # Fix hyphenation
+        text = C.fix_line_break_hyphenation(text)
+        
+        # Remove headers if requested
         if remove_running_headers:
-            text = C.strip_firstline_headers(text)
-
-        # Fix hyphen/dash linebreaks before joining
-        text = C.normalize_linebreak_hyphens(text)
-
-        # Strip unreadables; keep italics (we don't touch italics anywhere)
-        text = C.strip_underscores_and_unreadables(text)
-
-        # Remove all quotes; keep apostrophes
-        text = C.strip_all_quotes_keep_apostrophes(text)
-
-        # Drop URLs/emails/citations/footnote markers/captions
-        text = C.remove_unwanted(text)
-
-        # Optional: bottom footnotes near page ends
-        if remove_bottom_footnotes:
-            text = C.drop_footnotes_at_bottom(text)
-
-        # Remove known running header leftovers in case they slipped through
-        if remove_running_headers:
+            text = C.remove_page_headers(text)
             text = C.remove_known_header_lines(text)
             text = C.remove_all_caps_lines(text)
-
-        # Join safe single newlines (leave paragraph breaks; final flatten below)
-        text = C.join_wrapped_lines(text)
-
-        # Ellipses -> period
-        text = C.normalize_ellipses_to_period(text)
-
-        # Number ranges
-        text = C.tts_number_ranges(text)
-
-        # Punctuation shaping
-        text = C.tts_punctuation_shaping(text)
-        text = C.smooth_article_commas(text)
-
-        # NEW: remove hyphens/dashes between words (letter-letter only)
-        text = C.dehyphenate_word_compounds(text)
-
-        # Ensure missing spaces after punctuation and at digit/letter seams
-        text = C.ensure_punctuation_spacing(text)
-
-        # OCR nuisance fixes
-        text = C.ocr_spaced_letters(text)
-        text = C.ocr_digit_in_word_fixes(text)
-        text = C.ocr_common_word_fixes(text)
-
-        # Whitespace normalize (pre-flatten)
-        text = C.clean_whitespace_and_punct(text)
-
-        # FINAL: flatten to one single paragraph
-        text = C.final_flatten_to_single_paragraph(text)
-        return text
+        
+        # Remove footnotes if requested
+        if remove_bottom_footnotes:
+            text = C.remove_footnote_markers(text)
+        
+        # Remove quotes
+        text = C.remove_all_quotes(text)
+        
+        # Clean special characters
+        text = C.clean_special_characters(text)
+        
+        # Remove references
+        text = C.remove_references(text)
+        
+        # Join paragraphs properly
+        text = C.join_paragraphs_smart(text)
+        
+        # Fix punctuation
+        text = C.fix_punctuation_spacing(text)
+        
+        # Normalize whitespace
+        text = C.normalize_whitespace(text)
+        
+        # Final validation
+        text = C.validate_and_fix_spacing(text, len(text))
+        
+        return text.strip()
 
     # -------- Chunking & Stats --------
 
