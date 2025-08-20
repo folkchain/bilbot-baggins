@@ -75,6 +75,23 @@ def remove_bottom_page_numbers(text: str) -> str:
     
     return PAGE_BREAK.join(cleaned_pages)
 
+def fix_line_break_hyphenation(text: str) -> str:
+    """
+    1) Join words split by a hyphen-like char at line break: 'rea-\nding' -> 'reading'
+    2) Join tokens split like 'kin- folk' -> 'kinfolk'
+    3) Keep your suffix glue behavior (ture/tion/etc.)
+    """
+    # 1) across line breaks
+    text = re.sub(fr"([A-Za-z]){_HYPHEN_CLASS}\n([A-Za-z])", r"\1\2", text)
+
+    # 2) hyphen-like + space in the middle of a line -> join to a single word
+    text = re.sub(fr"(\b\w+){_HYPHEN_CLASS}\s+(\w+\b)", r"\1\2", text)
+
+    # 3) your original suffix glue idea (expanded to any hyphen-like)
+    text = re.sub(fr"([a-z]){_HYPHEN_CLASS}(ture|tion|ment|ness|ing|ed|er|est|ly|ity|ous|ive|ful|less|able|ible)(\s|$)", r"\1\2\3", text, flags=re.IGNORECASE)
+
+    return text
+
 def join_paragraphs_smart(text: str) -> str:
     """Joins lines into paragraphs with proper spacing, handling page breaks."""
     text = text.replace('\f', '\n\n') # Treat page breaks as paragraph breaks
