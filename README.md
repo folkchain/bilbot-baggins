@@ -20,7 +20,7 @@ Convert your TXT and PDF files into high-quality MP3 audiobooks using AI voices.
 - **Sentence-aware splitting**: Never breaks sentences mid-word
 - **Batch processing**: Efficiently handles long documents
 
-### 🏠 **Hobbit-Friendly Interface**
+### Interface**
 - **Streamlit web app**: Clean, intuitive interface
 - **Real-time progress**: See your audiobook being crafted
 - **Dual downloads**: Get both the MP3 and cleaned text
