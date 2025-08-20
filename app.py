@@ -299,9 +299,9 @@ st.markdown("""
 ### **Important Notes**
 
 - **Audio quality depends on your source file** - Clear text files produce better results than scanned/image-based PDFs
-- **OCR is complex** - We apply advanced text extraction and cleaning, but some documents may still have errors
+- **OCR is complex** - Advanced text extraction and cleaning is applied, but some documents may still have errors
 - **Work in progress** - Regular improvements are made to text processing and cleaning algorithms
-- **For Better Results** - Download the cleaned text file, edit, and upload.
+- **For Better Results** - 1. Save a copy of your PDF. 2. Prepare the copy by deleting all blank pages, title page, copyright page, table of contents, index, & endnotes. 3. Crop the PDF to remove page headers and footers. 4. Download the cleaned text file, edit, and upload.
 
 ---
 """)
