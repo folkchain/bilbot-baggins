@@ -213,11 +213,6 @@ def _inject_css():
         opacity: 1 !important;
         margin: 16px 0 !important;
       }}
-
-      div[data-baseweb="slider"]:has([aria-label="Pitch (Hz change)"]) > div > div {{ background-color: #D7CCAA !important; }}
-      div[data-baseweb="slider"]:has([aria-label="Pitch (Hz change)"]) > div > div > div {{ background-color: #4A7C59 !important; }}
-      div[data-baseweb="slider"]:has([aria-label="Pitch (Hz change)"]) [role="slider"] {{ background-color: #4A7C59 !important; border: 1px solid #fff !important; box-shadow: 0 0 0 4px rgba(74,124,89,.18) !important; }}
-      div[data-baseweb="slider"]:has([aria-label="Pitch (Hz change)"]) [data-testid="stSliderThumbValue"] {{ background: #4A7C59 !important; color: #fff !important; }}
     </style>
 
     <div class="bilbot-hero">
