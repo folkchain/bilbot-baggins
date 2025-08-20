@@ -33,56 +33,41 @@ def _inject_css():
 
     css = f"""
     <style>
-      /* Make the page advertise itself as light to the UA */
-      :root {{
+      /* Announce light; pin theme tokens used by Streamlit components */
+      :root,
+      :root [data-theme="light"],
+      :root [data-theme="dark"] {{
         color-scheme: light;
-        /* Override Streamlit theme variables used by components */
         --text-color: #2E2A22 !important;
         --background-color: #F4EEDA !important;
         --secondary-background-color: #EFE7CC !important;
         --primary-color: #4A7C59 !important;
       }}
 
-      /* Set base text color and force children to inherit it */
-      .stApp, [data-testid="stAppViewContainer"] {{
-        background: linear-gradient(180deg, #F4EEDA 0%, #EFE7CC 100%) !important;
+      /* App container: set the base text color and make ALL descendants inherit it */
+      .stApp,
+      [data-testid="stAppViewContainer"] {{
+        background: #F4EEDA !important;
         color: #2E2A22 !important;
       }}
-      .stApp * {{ color: inherit !important; }}
+      .stApp *, [data-testid="stAppViewContainer"] * {{
+        color: inherit !important;
+      }}
 
-      /* Sidebar */
+      /* Sidebar surface + inherit text */
       section[data-testid="stSidebar"] > div {{
         background: #EFE7CC !important;
         color: #2E2A22 !important;
       }}
       section[data-testid="stSidebar"] * {{ color: inherit !important; }}
 
-      /* Markdown & text containers can get forced dark styles on Cloud */
+      /* Markdown/Text containers (common white-text culprits in prod) */
       [data-testid="stMarkdownContainer"], .stMarkdown, .stText, .stCaption, .stAlert {{
         color: #2E2A22 !important;
       }}
-      [data-testid="stMarkdownContainer"] * {{
-        color: inherit !important;
-      }}
+      [data-testid="stMarkdownContainer"] * {{ color: inherit !important; }}
 
-      /* Headings / labels / help text */
-      h1, h2, h3, h4, h5, h6,
-      p, span, label, small, em, strong, mark,
-      .stCheckbox, .stRadio, .stSelectbox, .stSlider, .stTextInput, .stTextArea {{
-        color: #2E2A22 !important;
-      }}
-
-      /* Links */
-      a, a:link, a:visited {{ color: #4A7C59 !important; }}
-
-      /* Buttons */
-      .stButton>button, .stDownloadButton>button {{
-        border-radius: 12px; padding: 10px 16px; border: 2px solid #3A2F21;
-        background:#4A7C59 !important; color:#F4EEDA !important; font-weight:600;
-      }}
-      .stButton>button:hover, .stDownloadButton>button:hover {{ filter: brightness(1.05); }}
-
-      /* Selectbox / inputs (BaseWeb) — background & text frequently get flipped in dark */
+      /* Inputs / selects (BaseWeb) */
       .stSelectbox div[data-baseweb="select"] > div,
       .stTextInput input, .stTextArea textarea {{
         background: #F4EEDA !important;
@@ -92,16 +77,16 @@ def _inject_css():
       .stSelectbox [data-baseweb="select"] * {{ color: #2E2A22 !important; }}
       .stSelectbox [data-baseweb="select"] svg {{ fill: #2E2A22 !important; }}
 
-      /* Slider track / thumb can inherit dark variables */
-      .stSlider [data-baseweb="slider"] * {{ color: #2E2A22 !important; }}
-      .stSlider [data-baseweb="slider"] {{
-        background: transparent !important;
+      /* Buttons: keep your brand foreground on the button itself */
+      .stButton>button, .stDownloadButton>button {{
+        border-radius: 12px; padding: 10px 16px; border: 2px solid #3A2F21;
+        background:#4A7C59 !important; color:#F4EEDA !important; font-weight:600;
       }}
 
       /* Code blocks */
       pre, code {{ color: #2E2A22 !important; }}
 
-      /* Hero block (unchanged; just add !important so it wins) */
+      /* Your hero (unchanged visually; just add !important so it wins) */
       .bilbot-hero {{
         display:flex; align-items:center; gap:16px; margin: 4px 0 12px 0;
         padding: 12px 16px; border-radius: 16px;
@@ -119,6 +104,9 @@ def _inject_css():
       .bilbot-sub {{
         margin: 2px 0 0 0; color: #4A7C59 !important; font-size: 14px;
       }}
+
+      /* Hard overrides for prod utilities that set white text */
+      .text-white, [class*="text-white"] {{ color: #2E2A22 !important; }}
     </style>
 
     <div class="bilbot-hero">
