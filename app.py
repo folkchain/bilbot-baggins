@@ -246,6 +246,8 @@ def load_english_neural_voices():
 VOICES = load_english_neural_voices()
 
 # --- Helper Functions --------------------------------------------------------
+SAFE_MAX = 1800  # conservative per-call limit for edge-tts
+
 def signed(val: int) -> str:
     return f"+{val}" if val >= 0 else str(val)
 
@@ -361,14 +363,24 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
                     continue
 
                 status.write(f"🔊 Generating audio… {i}/{total}")
-                part_path = os.path.join(td, f"part_{i:03d}.mp3")
+                base_path = os.path.join(td, f"part_{i:03d}")
+
                 safe_chunk = sanitize_for_tts(ch)
 
-                asyncio.run(synthesize_mp3_async(
-                    safe_chunk, voice, part_path,
-                    rate_pct, pitch_hz
-                ))
-                part_paths.append(part_path)
+                # --- HARD CAP and split if needed ---
+                if len(safe_chunk) > SAFE_MAX:
+                    parts = [safe_chunk[j:j+SAFE_MAX] for j in range(0, len(safe_chunk), SAFE_MAX)]
+                else:
+                    parts = [safe_chunk]
+
+                # synthesize each part then collect paths in order
+                for j, p in enumerate(parts, 1):
+                    part_path = f"{base_path}_{j:02d}.mp3" if len(parts) > 1 else f"{base_path}.mp3"
+                    asyncio.run(synthesize_mp3_async(
+                        p, voice, part_path,
+                        rate_pct, pitch_hz
+                    ))
+                    part_paths.append(part_path)
 
                 frac = i / total
                 prog.progress(frac, text=f"Generating… {int(frac * 100)}%")
@@ -399,7 +411,7 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
 if st.session_state.get('mp3_bytes'):
     st.success("✅ Your audiobook is ready!")
     c1, c2 = st.columns(2)
-    c1.download_button( "⬇️ Download MP3", data=st.session_state.mp3_bytes, file_name=st.session_state.mp3_filename, mime="audio/mpeg")
+    c1.download_button("⬇️ Download MP3", data=st.session_state.mp3_bytes, file_name=st.session_state.mp3_filename, mime="audio/mpeg")
     c2.download_button("⬇️ Download Cleaned Text", data=st.session_state.cleaned_text.encode("utf-8"), file_name=st.session_state.txt_filename, mime="text/plain")
     
     if st.button("🔄 Reset and Start Over"):
