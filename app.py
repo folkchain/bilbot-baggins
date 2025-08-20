@@ -378,26 +378,26 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
             skipped = []
             # put this right before the for-loop over chunks
             for i, ch in enumerate(chunks, 1):
-                if not ch.strip():
-                    continue
+    if not ch.strip():
+        continue
 
-                status.write(f"🔊 Generating audio… {i}/{total}")
-                base_path = os.path.join(td, f"part_{i:03d}")
-                safe_chunk = sanitize_for_tts(ch)
+    status.write(f"🔊 Generating audio… {i}/{total}")
+    base_path = os.path.join(td, f"part_{i:03d}")
 
-                # --- HARD CAP and split if needed ---
-                if len(safe_chunk) > SAFE_MAX:
-            parts = [safe_chunk[j:j+SAFE_MAX] for j in range(0, len(safe_chunk), SAFE_MAX)]
+    safe_chunk = sanitize_for_tts(ch)
+
+    if len(safe_chunk) > SAFE_MAX:
+        parts = [safe_chunk[j:j+SAFE_MAX] for j in range(0, len(safe_chunk), SAFE_MAX)]
+    else:
+        parts = [safe_chunk]
+
+    for j, p in enumerate(parts, 1):
+        part_path = f"{base_path}_{j:02d}.mp3" if len(parts) > 1 else f"{base_path}.mp3"
+        ok = synthesize_with_retry(p, voice, part_path, rate_pct, pitch_hz)
+        if ok:
+            part_paths.append(part_path)
         else:
-            parts = [safe_chunk]
-
-        for j, p in enumerate(parts, 1):
-            part_path = f"{base_path}_{j:02d}.mp3" if len(parts) > 1 else f"{base_path}.mp3"
-            ok = synthesize_with_retry(p, voice, part_path, rate_pct, pitch_hz, tries=3, delay=0.8)
-            if ok:
-                part_paths.append(part_path)
-            else:
-                skipped.append(p)  # collect skipped fragments
+            skipped.append(p)
 
                 frac = i / total
                 prog.progress(frac, text=f"Generating… {int(frac * 100)}%")
