@@ -94,7 +94,7 @@ def _inject_css():
         box-shadow: 0 4px 14px rgba(60, 55, 45, 0.08);
       }}
       .bilbot-hero img {{
-        width: 72px; height: 72px; border-radius: 16px; border: 2px solid #3A2F21;
+        width: 120px; height: auto; border-radius: 16px; border: 2px solid #3A2F21;
       }}
       .bilbot-title {{
         font-family: Georgia, 'Times New Roman', serif;
@@ -319,31 +319,59 @@ if uploaded:
                 st.success(f"Text processed into {len(st.session_state.chunks)} chunks. Ready to generate.")
 
 if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_state.get('chunks')):
-    with st.spinner("Generating audio..."):
-        chunks = st.session_state.chunks
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                part_paths = []
-                for i, ch in enumerate(chunks, 1):
-                    if not ch.strip(): continue
-                    part_path = os.path.join(td, f"part_{i:03d}.mp3")
-                    safe_chunk = sanitize_for_tts(ch)
-                    asyncio.run(synthesize_mp3_async(
-                        safe_chunk, voice, part_path,
-                        rate_pct, pitch_hz, volume_pct
-                    ))
-                    part_paths.append(part_path)
-                final_bytes = b"".join(open(p, "rb").read() for p in part_paths)
-                
-                st.session_state.mp3_bytes = final_bytes
-                out_base = Path(uploaded.name).stem
-                st.session_state.mp3_filename = f"{out_base}.mp3"
-                st.session_state.txt_filename = f"{out_base}.clean.txt"
-        
-        except Exception as e:
-            st.error(f"Error on chunk {i}: {e}")
-            st.text_area("Problematic Text", ch, height=200)
-            st.session_state.mp3_bytes = None
+    chunks = st.session_state.get('chunks', [])
+    if not chunks:
+        st.warning("No chunks available yet. Upload a file and process it first.")
+        st.stop()
+
+    total = len(chunks)
+    prog = st.progress(0, text="Starting… 0%")
+    status = st.empty()  # small, inline status text
+    started = time.monotonic()
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            part_paths = []
+
+            for i, ch in enumerate(chunks, 1):
+                if not ch.strip():
+                    continue
+
+                status.write(f"🔊 Generating audio… {i}/{total}")
+                part_path = os.path.join(td, f"part_{i:03d}.mp3")
+                safe_chunk = sanitize_for_tts(ch)
+
+                asyncio.run(synthesize_mp3_async(
+                    safe_chunk, voice, part_path,
+                    rate_pct, pitch_hz, volume_pct
+                ))
+                part_paths.append(part_path)
+
+                frac = i / total
+                prog.progress(frac, text=f"Generating… {int(frac * 100)}%")
+
+            prog.progress(1.0, text="Merging audio…")
+            final_bytes = b"".join(open(p, "rb").read() for p in part_paths)
+
+        st.session_state.mp3_bytes = final_bytes
+        out_base = Path(uploaded.name).stem
+        st.session_state.mp3_filename = f"{out_base}.mp3"
+        st.session_state.txt_filename = f"{out_base}.clean.txt"
+
+        elapsed = time.monotonic() - started
+        prog.progress(1.0, text=f"Done in {elapsed:.1f}s")
+
+    except Exception as e:
+        prog.progress(0.0, text="Failed")
+        st.error(f"Error on chunk {i}: {e}")
+        st.text_area("Problematic Text", ch, height=200)
+        st.session_state.mp3_bytes = None
+
+    finally:
+        # clear transient status widgets so the success UI is visible beneath
+        status.empty()
+        # keep the final progress text visible; comment the next line if you'd prefer it to stay
+        # prog.empty()
 
 if st.session_state.get('mp3_bytes'):
     st.success("✅ Your audiobook is ready!")
