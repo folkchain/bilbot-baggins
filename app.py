@@ -2,6 +2,7 @@
 import os
 import asyncio
 import tempfile
+import io
 from pathlib import Path
 
 import streamlit as st
@@ -276,6 +277,23 @@ async def synthesize_mp3_async(text: str, voice: str, out_path: str, rate_pct: i
     )
     await communicate.save(out_path)  # fall back to library default
 
+# --- Retry helper ------------------------------------------------------------
+def synthesize_with_retry(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int,
+                          tries: int = 3, delay: float = 0.8) -> bool:
+    """
+    Run synthesize_mp3_async with a few retries. Returns True on success, False on failure.
+    """
+    last_err = None
+    for attempt in range(1, tries + 1):
+        try:
+            asyncio.run(synthesize_mp3_async(text, voice, out_path, rate_pct, pitch_hz))
+            return True
+        except Exception as e:
+            last_err = e
+            time.sleep(delay * attempt)
+    return False  # give up after retries
+
+
 # --- UI & State Initialization ------------------------------------------------
 st.session_state.setdefault('last_file_identifier', None)
 st.session_state.setdefault('last_options', None)
@@ -357,30 +375,29 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
     try:
         with tempfile.TemporaryDirectory() as td:
             part_paths = []
-
+            skipped = []
+            # put this right before the for-loop over chunks
             for i, ch in enumerate(chunks, 1):
                 if not ch.strip():
                     continue
 
                 status.write(f"🔊 Generating audio… {i}/{total}")
                 base_path = os.path.join(td, f"part_{i:03d}")
-
                 safe_chunk = sanitize_for_tts(ch)
 
                 # --- HARD CAP and split if needed ---
                 if len(safe_chunk) > SAFE_MAX:
-                    parts = [safe_chunk[j:j+SAFE_MAX] for j in range(0, len(safe_chunk), SAFE_MAX)]
-                else:
-                    parts = [safe_chunk]
+            parts = [safe_chunk[j:j+SAFE_MAX] for j in range(0, len(safe_chunk), SAFE_MAX)]
+        else:
+            parts = [safe_chunk]
 
-                # synthesize each part then collect paths in order
-                for j, p in enumerate(parts, 1):
-                    part_path = f"{base_path}_{j:02d}.mp3" if len(parts) > 1 else f"{base_path}.mp3"
-                    asyncio.run(synthesize_mp3_async(
-                        p, voice, part_path,
-                        rate_pct, pitch_hz
-                    ))
-                    part_paths.append(part_path)
+        for j, p in enumerate(parts, 1):
+            part_path = f"{base_path}_{j:02d}.mp3" if len(parts) > 1 else f"{base_path}.mp3"
+            ok = synthesize_with_retry(p, voice, part_path, rate_pct, pitch_hz, tries=3, delay=0.8)
+            if ok:
+                part_paths.append(part_path)
+            else:
+                skipped.append(p)  # collect skipped fragments
 
                 frac = i / total
                 prog.progress(frac, text=f"Generating… {int(frac * 100)}%")
@@ -395,6 +412,17 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
 
         elapsed = time.monotonic() - started
         prog.progress(1.0, text=f"Done in {elapsed:.1f}s")
+            # If some fragments were skipped, show them
+        if skipped:
+            with st.expander(f"⚠️ Skipped {len(skipped)} fragment(s)"):
+                st.write("These fragments failed after retries. You can download and review them:")
+                skipped_txt = "\n\n---\n\n".join(skipped)
+                st.download_button(
+                    "⬇️ Download skipped fragments",
+                    data=skipped_txt.encode("utf-8"),
+                    file_name=f"{out_base}.skipped.txt",
+                    mime="text/plain"
+                )
 
     except Exception as e:
         prog.progress(0.0, text="Failed")
