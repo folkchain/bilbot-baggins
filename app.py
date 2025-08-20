@@ -107,6 +107,53 @@ def _inject_css():
 
       /* Hard overrides for prod utilities that set white text */
       .text-white, [class*="text-white"] {{ color: #2E2A22 !important; }}
+      
+      /* === Streamlit file uploader: keep brown text on parchment === */
+      label[data-testid="stWidgetLabel"] {{ color: #2E2A22 !important; }}
+
+      section[data-testid="stFileUploaderDropzone"] {{
+        background: #EFE7CC !important;
+        color: #2E2A22 !important;
+        border: 2px dashed #3A2F21 !important;
+      }}
+      section[data-testid="stFileUploaderDropzone"] * {{
+        color: inherit !important;
+        fill: currentColor !important; /* the cloud icon */
+      }}
+
+      /* The “Drag and drop…” helper text */
+      [data-testid="stFileUploaderDropzoneInstructions"] {{
+        color: #2E2A22 !important;
+      }}
+      [data-testid="stFileUploaderDropzoneInstructions"] * {{
+        color: inherit !important;
+      }}
+
+      /* The “Browse files” button that lives with the dropzone */
+      [data-testid="stFileUploader"] button,
+      section[data-testid="stFileUploaderDropzone"] + button {{
+        background: #4A7C59 !important;
+        color: #F4EEDA !important;
+        border: 2px solid #3A2F21 !important;
+      }}
+
+      /* === Disabled secondary button (Generate Audio before a file is uploaded) === */
+      button[disabled][data-testid="stBaseButton-secondary"] {{
+        background: #C9D7C9 !important; /* muted moss for disabled state */
+        color: #2E2A22 !important;
+        border: 2px solid #3A2F21 !important;
+        opacity: 1 !important; /* avoid gray overlay that can flip text color */
+      }}
+      button[disabled][data-testid="stBaseButton-secondary"] * {{
+        color: inherit !important;
+      }}
+
+      /* Keep secondary buttons consistent in general */
+      button[data-testid="stBaseButton-secondary"]:not([disabled]) {{
+        background: #4A7C59 !important;
+        color: #F4EEDA !important;
+        border: 2px solid #3A2F21 !important;
+      }}
     </style>
 
     <div class="bilbot-hero">
