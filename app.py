@@ -33,23 +33,41 @@ def _inject_css():
 
     css = f"""
     <style>
-      /* --- Force our light palette even if viewer/system is dark --- */
-      :root,
-      html,
-      body,
-      .stApp,
-      [data-testid="stAppViewContainer"] {{
+      /* Force light palette everywhere */
+      html, body, .stApp, [data-testid="stAppViewContainer"] {{
         background: #F4EEDA !important;
         color: #2E2A22 !important;
       }}
 
-      /* Sidebar background */
+      /* Sidebar */
       section[data-testid="stSidebar"] > div {{
         background: #EFE7CC !important;
         color: #2E2A22 !important;
       }}
 
-      /* Top hero */
+      /* Buttons */
+      .stButton>button, .stDownloadButton>button {{
+        border-radius: 12px; padding: 10px 16px; border: 2px solid #3A2F21;
+        background:#4A7C59 !important; color:#F4EEDA !important; font-weight:600;
+      }}
+      .stButton>button:hover, .stDownloadButton>button:hover {{
+        filter: brightness(1.05);
+      }}
+
+      /* Selectboxes and inputs */
+      .stSelectbox div[data-baseweb="select"] > div,
+      .stTextInput input, .stTextArea textarea {{
+        background: #F4EEDA !important;
+        color: #2E2A22 !important;
+        border: 2px solid #3A2F21 !important;
+      }}
+
+      /* Code blocks and markdown text */
+      pre, code, .stText, .stMarkdown, .stCaption, .stAlert {{
+        color: #2E2A22 !important;
+      }}
+
+      /* Hero block */
       .bilbot-hero {{
         display:flex; align-items:center; gap:16px; margin: 4px 0 12px 0;
         padding: 12px 16px; border-radius: 16px;
@@ -67,37 +85,7 @@ def _inject_css():
       .bilbot-sub {{
         margin: 2px 0 0 0; color: #4A7C59 !important; font-size: 14px;
       }}
-
-      /* Buttons (primary + download) */
-      .stButton>button, .stDownloadButton>button {{
-        border-radius: 12px; padding: 10px 16px; border: 2px solid #3A2F21;
-        background:#4A7C59 !important; color:#F4EEDA !important; font-weight:600;
-      }}
-      .stButton>button:hover, .stDownloadButton>button:hover {{ filter: brightness(1.05); }}
-
-      /* Selectbox container + text */
-      .stSelectbox div[data-baseweb="select"] > div {{
-        border-radius: 12px; border: 2px solid #3A2F21;
-        background: #F4EEDA !important; color: #2E2A22 !important;
-      }}
-      .stSelectbox div[data-baseweb="select"] * {{
-        color: #2E2A22 !important;
-      }}
-
-      /* Sliders & form controls often get dark colors: normalize */
-      .stSlider [data-baseweb="slider"] *,
-      .stTextInput input, .stTextArea textarea, .stTextInput>div>div,
-      .stTextArea>div>div {{
-        background: #F4EEDA !important; color: #2E2A22 !important;
-        border-color: #3A2F21 !important;
-      }}
-
-      /* Code / preformatted text */
-      pre, code, .stText, .stMarkdown, .stCaption, .stAlert {{
-        color: #2E2A22 !important;
-      }}
     </style>
-
     <div class="bilbot-hero">
       <img src="data:image/png;base64,{b64}" alt="BilBot Baggins logo"/>
       <div>
