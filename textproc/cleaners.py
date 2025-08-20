@@ -104,11 +104,34 @@ def final_flatten(text: str) -> str:
     return re.sub(r'\s+', ' ', text).strip()
 
 def remove_footnote_markers(text: str) -> str:
-    """Removes footnote markers like [1] or (2)."""
-    text = re.sub(r'\[\d+\]', '', text)
-    text = re.sub(r'\(\d+\)', '', text)
-    text = re.sub(r'([.!?,;:])\d{1,3}', r'\1', text)
-    return text
+    """Remove inline footnote markers and trailing footnote blocks per page."""
+    # 1) Inline markers
+    text = re.sub(r'\[\s*\d+\s*\]', '', text)
+    text = re.sub(r'\(\s*\d+\s*\)', '', text)
+    text = re.sub(r'([.!?,;:])\s*(\d{1,3})(?![\d-])\b', r'\1', text)
+    text = re.sub(r'[\u00B9\u00B2\u00B3\u2070-\u2079\u2020\u2021]+', '', text)  # ¹²³… and †‡
+    # Remove page citations like "p. 80", "p.80.", "(pp. 100-105)", etc., and eat a trailing comma/period if present
+    text = re.sub(r'(?ix)\(?\s*p{1,2}\.\s*(?:\d+|[ivxlcdm]+)(?:\s*[-–—]\s*(?:\d+|[ivxlcdm]+))?\s*\)?(?:\s*[.,;:])?', '', text)
+    text = re.sub(r'\s+(?=[.,;:!?])', '', text)
+    text = re.sub(r' {2,}', ' ', text)
+
+
+
+    # 2) Bottom-of-page footnote blocks, e.g., "3. ..." / "4) ..." / "† ..."
+    PAGE_BREAK = "\f"
+    pages = text.split(PAGE_BREAK) if PAGE_BREAK in text else [text]
+    cleaned_pages = []
+    for page in pages:
+        lines = page.splitlines()
+        cut = len(lines)
+        # scan upward and, if a note starter is near the bottom, drop everything from there to page end
+        for i in range(len(lines) - 1, -1, -1):
+            if re.match(r'^\s*(?:\d{1,3}[.)]|[*\u2020\u2021])\s+', lines[i]):
+                if len(lines) - i <= 14 or i >= int(0.75 * len(lines)):
+                    cut = i
+                break
+        cleaned_pages.append('\n'.join(lines[:cut]).rstrip())
+    return PAGE_BREAK.join(cleaned_pages)
 
 def remove_references(text: str) -> str:
     """Removes URLs, emails, and common citation formats."""
