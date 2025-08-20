@@ -272,11 +272,7 @@ async def synthesize_mp3_async(text: str, voice: str, out_path: str, rate_pct: i
       rate=f"{signed(rate_pct)}%",
       pitch=f"{signed(pitch_hz)}Hz"
     )
-    try:
-        await communicate.save(out_path, output_format="audio-24khz-96kbitrate-mono-mp3")
-    except TypeError:  # some older builds may not accept output_format here
-        await communicate.save(out_path)  # fall back to library default
-
+    await communicate.save(out_path)  # fall back to library default
 
 # --- UI & State Initialization ------------------------------------------------
 st.session_state.setdefault('last_file_identifier', None)
