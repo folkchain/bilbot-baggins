@@ -148,6 +148,33 @@ def _inject_css():
         color: inherit !important;
       }}
 
+      /* Enabled secondary buttons (e.g., "Generate Audio") */
+      button[data-testid="stBaseButton-secondary"]:not([disabled]) {{
+        background: #4A7C59 !important;   /* moss green */
+        color: #F4EEDA !important;        /* parchment text */
+        border: 2px solid #3A2F21 !important;
+        font-weight: 600;
+      }}
+      button[data-testid="stBaseButton-secondary"]:not([disabled]) * {{
+        color: inherit !important;
+      }}
+
+      /* Optional: keep hover consistent */
+      button[data-testid="stBaseButton-secondary"]:not([disabled]):hover {{
+        filter: brightness(1.05);
+      }}
+
+      /* Disabled secondary button state (before a file is uploaded) */
+      button[disabled][data-testid="stBaseButton-secondary"] {{
+        background: #C9D7C9 !important;   /* muted moss */
+        color: #2E2A22 !important;
+        border: 2px solid #3A2F21 !important;
+        opacity: 1 !important;            /* avoid dim overlay */
+      }}
+      button[disabled][data-testid="stBaseButton-secondary"] * {{
+        color: inherit !important;
+      }}
+
       /* Keep secondary buttons consistent in general */
       button[data-testid="stBaseButton-secondary"]:not([disabled]) {{
         background: #4A7C59 !important;
