@@ -266,6 +266,7 @@ def pick_chunk_size(text: str) -> int:
         return 2200
 
 def sanitize_for_tts(text: str) -> str:
+    # very light sanitizer — we avoid aggressive transforms here
     return text.replace('&', ' and ').replace('<', '').replace('>', '')
 
 async def synthesize_mp3_async(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int):
@@ -283,16 +284,13 @@ def synthesize_with_retry(text: str, voice: str, out_path: str, rate_pct: int, p
     """
     Run synthesize_mp3_async with a few retries. Returns True on success, False on failure.
     """
-    last_err = None
     for attempt in range(1, tries + 1):
         try:
             asyncio.run(synthesize_mp3_async(text, voice, out_path, rate_pct, pitch_hz))
             return True
-        except Exception as e:
-            last_err = e
+        except Exception:
             time.sleep(delay * attempt)
     return False  # give up after retries
-
 
 # --- UI & State Initialization ------------------------------------------------
 st.session_state.setdefault('last_file_identifier', None)
@@ -303,11 +301,10 @@ st.session_state.setdefault('mp3_bytes', None)
 st.session_state.setdefault('mp3_filename', "")
 st.session_state.setdefault('txt_filename', "")
 
-# --- Main App Logic -----------------------------------------------------------
+# You had an auto-clear here; remove it so reruns don't wipe progress.
 uploaded = st.file_uploader("Upload a PDF or TXT", type=["pdf", "txt"], key="upload")
-
-if not uploaded:
-    st.session_state.clear()
+if uploaded is None:
+    pass  # do not clear session here; keep state across reruns
 
 st.markdown("""
 ---
@@ -375,32 +372,37 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
     try:
         with tempfile.TemporaryDirectory() as td:
             part_paths = []
-            skipped = []
-            # put this right before the for-loop over chunks
+            skipped = []  # collect skipped fragments
+
             for i, ch in enumerate(chunks, 1):
-    if not ch.strip():
-        continue
+                if not ch.strip():
+                    continue
 
-    status.write(f"🔊 Generating audio… {i}/{total}")
-    base_path = os.path.join(td, f"part_{i:03d}")
+                status.write(f"🔊 Generating audio… {i}/{total}")
+                base_path = os.path.join(td, f"part_{i:03d}")
 
-    safe_chunk = sanitize_for_tts(ch)
+                safe_chunk = sanitize_for_tts(ch)
 
-    if len(safe_chunk) > SAFE_MAX:
-        parts = [safe_chunk[j:j+SAFE_MAX] for j in range(0, len(safe_chunk), SAFE_MAX)]
-    else:
-        parts = [safe_chunk]
+                # Hard cap and split if needed
+                if len(safe_chunk) > SAFE_MAX:
+                    parts = [safe_chunk[j:j+SAFE_MAX] for j in range(0, len(safe_chunk), SAFE_MAX)]
+                else:
+                    parts = [safe_chunk]
 
-    for j, p in enumerate(parts, 1):
-        part_path = f"{base_path}_{j:02d}.mp3" if len(parts) > 1 else f"{base_path}.mp3"
-        ok = synthesize_with_retry(p, voice, part_path, rate_pct, pitch_hz)
-        if ok:
-            part_paths.append(part_path)
-        else:
-            skipped.append(p)
+                # Synthesize each part with retry
+                for j, p in enumerate(parts, 1):
+                    part_path = f"{base_path}_{j:02d}.mp3" if len(parts) > 1 else f"{base_path}.mp3"
+                    ok = synthesize_with_retry(p, voice, part_path, rate_pct, pitch_hz, tries=3, delay=0.8)
+                    if ok:
+                        part_paths.append(part_path)
+                    else:
+                        skipped.append(p)
 
                 frac = i / total
                 prog.progress(frac, text=f"Generating… {int(frac * 100)}%")
+
+            if not part_paths:
+                raise RuntimeError("All chunks failed to synthesize.")
 
             prog.progress(1.0, text="Merging audio…")
             final_bytes = b"".join(open(p, "rb").read() for p in part_paths)
@@ -412,7 +414,8 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
 
         elapsed = time.monotonic() - started
         prog.progress(1.0, text=f"Done in {elapsed:.1f}s")
-            # If some fragments were skipped, show them
+
+        # Show any skipped fragments
         if skipped:
             with st.expander(f"⚠️ Skipped {len(skipped)} fragment(s)"):
                 st.write("These fragments failed after retries. You can download and review them:")
@@ -439,8 +442,18 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
 if st.session_state.get('mp3_bytes'):
     st.success("✅ Your audiobook is ready!")
     c1, c2 = st.columns(2)
-    c1.download_button("⬇️ Download MP3", data=st.session_state.mp3_bytes, file_name=st.session_state.mp3_filename, mime="audio/mpeg")
-    c2.download_button("⬇️ Download Cleaned Text", data=st.session_state.cleaned_text.encode("utf-8"), file_name=st.session_state.txt_filename, mime="text/plain")
+    c1.download_button(
+        "⬇️ Download MP3",
+        data=st.session_state.mp3_bytes,
+        file_name=st.session_state.mp3_filename,
+        mime="audio/mpeg"
+    )
+    c2.download_button(
+        "⬇️ Download Cleaned Text",
+        data=st.session_state.cleaned_text.encode("utf-8"),
+        file_name=st.session_state.txt_filename,
+        mime="text/plain"
+    )
     
     if st.button("🔄 Reset and Start Over"):
         st.session_state.clear()
