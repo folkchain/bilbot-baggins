@@ -181,6 +181,28 @@ def _inject_css():
         color: #F4EEDA !important;
         border: 2px solid #3A2F21 !important;
       }}
+      /* === Status box (st.status) === */
+      [data-testid="stStatus"] {{
+        background: #EFE7CC !important;            /* lighter parchment */
+        color: #2E2A22 !important;                 /* warm brown text */
+        border: 2px solid #3A2F21 !important;
+        border-radius: 12px !important;
+      }}
+      [data-testid="stStatus"] * {{
+        color: inherit !important;
+      }}
+
+      /* === Progress bar (st.progress) === */
+      [data-testid="stProgressBar"] > div {{
+        background: #D7CCAA !important;            /* track color */
+      }}
+      [data-testid="stProgressBar"] div[role="progressbar"] {{
+        background: #4A7C59 !important;            /* fill color (moss green) */
+      }}
+      /* Progress label text (e.g., "Generating… 42%") */
+      [data-testid="stProgressBar"] [data-testid="stProgressBarLabel"] {{
+        color: #2E2A22 !important;
+      }}
     </style>
 
     <div class="bilbot-hero">
