@@ -203,6 +203,17 @@ def _inject_css():
       [data-testid="stProgressBar"] [data-testid="stProgressBarLabel"] {{
         color: #2E2A22 !important;
       }}
+      /* === Make horizontal rules (st.write("---") / st.divider()) visible in prod === */
+      [data-testid="stMarkdownContainer"] hr,
+      hr,
+      [role="separator"] {{
+        border: 0 !important;
+        border-top: 2px solid #3A2F21 !important;  /* warm brown line */
+        height: 0 !important;
+        opacity: 1 !important;
+        margin: 16px 0 !important;
+      }}
+
     </style>
 
     <div class="bilbot-hero">
@@ -276,6 +287,18 @@ uploaded = st.file_uploader("Upload a PDF or TXT", type=["pdf", "txt"], key="upl
 
 if not uploaded:
     st.session_state.clear()
+
+st.markdown("""
+---
+### **Important Notes**
+
+- **Audio quality depends on your source file** - Clear text files produce better results than scanned/image-based PDFs
+- **OCR is complex** - We apply advanced text extraction and cleaning, but some documents may still have errors
+- **Work in progress** - Regular improvements are made to text processing and cleaning algorithms
+- **For Better Results** - Download the cleaned text file, edit, and upload.
+
+---
+""")
 
 default_idx = VOICES.index(DEFAULT_VOICE) if DEFAULT_VOICE in VOICES else 0
 voice = st.selectbox("Voice", VOICES, index=default_idx, key="voice")
