@@ -2,7 +2,7 @@
 
 *"In a server in the cloud, there lived a bot..."*
 
-Convert your TXT and PDF files into high-quality MP3 audiobooks using AI voices. Named after the most famous hobbit who went on unexpected journeys, BilBot helps your documents embark on their own adventure—from static text to spoken word.
+Convert your TXT and PDF files into high-quality MP3 audiobooks using AI voices.
 
 ## ✨ Features
 
