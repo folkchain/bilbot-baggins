@@ -1,5 +1,14 @@
 # -*- coding: utf-8 -*-
 import re
+# --- Minimal pre‑TTS sanitizer ---
+import re
+_ZW   = re.compile(r"[\u200B\u200C\u200D\u2060\ufeff]")          # zero‑widths, BOM
+_CTRL = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")          # control chars
+
+def simple_tts_clean(s: str) -> str:
+    s = _ZW.sub("", s)
+    s = _CTRL.sub(" ", s)
+    return " ".join(s.split())  # collapse odd spacing
 # Normalize/handle these as hyphen-like
 _HYPHEN_CLASS = r"[-\u00AD\u2010-\u2015\u2212\u2043\u058A\u05BE\u1400\u1806\u2E3A\u2E3B\uFE63\uFF0D\u30A0\u1100]"
 
