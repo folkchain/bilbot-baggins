@@ -24,8 +24,7 @@ st.set_page_config(
     page_title=f"{APP_NAME} - Audiobook",
     page_icon=_logo_img,
     layout="centered",
-    initial_sidebar_state="auto",
-    theme="light"  # <-- THIS LINE FORCES THE LIGHT THEME
+    initial_sidebar_state="auto"
 )
 
 def _inject_css():
