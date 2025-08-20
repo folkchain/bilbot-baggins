@@ -36,6 +36,7 @@ Convert your TXT and PDF files into high-quality MP3 audiobooks using AI voices.
 ### Installation
 
 ```bash
+
 # Clone the repository
 git clone <your-repo-url>
 cd bilbot-baggins
@@ -51,12 +52,15 @@ brew install ocrmypdf
 Run the Application
 bashstreamlit run app.py
 Open your browser to http://localhost:8501 and start converting!
-📚 How It Works
 ```
+
+📚 How It Works
 
 ### Run the Application
 ```bash
+
 streamlit run app.py
+
 ```
 Open your browser to http://localhost:8501 and start converting!
 
