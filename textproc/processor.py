@@ -116,20 +116,20 @@ class TextProcessor:
             return ""
 
         # 1. Perform initial structural cleaning on the raw text.
+        text = C.remove_all_quotes(text)
         text = C.fix_line_break_hyphenation(text)
+        text = C.remove_bottom_page_numbers(text)
         if remove_running_headers:
             text = C.strip_firstline_headers(text)
-
-        # 2. Join lines into paragraphs.
-        text = C.join_paragraphs_smart(text)
 
         # 3. Remove non-content elements.
         if remove_bottom_footnotes:
             text = C.remove_footnote_markers(text)
         text = C.remove_references(text)
+        text = C.remove_citation_lines(text)
 
         # 4. Clean the actual content.
-        text = C.remove_all_quotes(text)
+        text = C.join_paragraphs_smart(text)
         text = C.clean_special_characters(text)
         text = C.fix_punctuation_spacing(text)
         
@@ -139,7 +139,7 @@ class TextProcessor:
         # 6. Finally, flatten the text.
         text = C.final_flatten(text)
         
-        return text
+        return text.strip()
 
     # -------- Chunking & Stats --------
 

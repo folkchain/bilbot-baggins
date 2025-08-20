@@ -15,7 +15,7 @@ Convert your TXT and PDF files into high-quality MP3 audiobooks using AI voices.
 
 ### 🎧 **Professional Audio Generation**
 - **Neural AI voices**: Multiple high-quality English voices
-- **Voice customization**: Adjust rate, pitch, and volume
+- **Voice customization**: Adjust rate, and pitch
 - **Smart chunking**: Optimizes text segments for natural speech flow
 - **Sentence-aware splitting**: Never breaks sentences mid-word
 - **Batch processing**: Efficiently handles long documents
@@ -52,36 +52,39 @@ Run the Application
 bashstreamlit run app.py
 Open your browser to http://localhost:8501 and start converting!
 📚 How It Works
+```
 
-Run the Application
-bash
-
+### Run the Application
+```bash
 streamlit run app.py
+```
 Open your browser to http://localhost:8501 and start converting!
+
 📚 How It Works
 1. Upload: Drop your PDF or TXT file into the interface
 2. Configure: Choose your voice and cleaning options
 3. Process: BilBot extracts, cleans, and chunks your text
 4. Generate: AI voices bring your text to life
 5. Download: Get your MP3 audiobook and cleaned text
-🔧 Technical Details
+
+### Technical Details
 Text Processing Pipeline
 
 Raw File → Text Extraction → OCR (if needed) → Cleaning → Chunking → TTS → MP3
 
-Key Components
+### Key Components
 * extractors.py: Multi-library PDF extraction with quality scoring
 * cleaners.py: Comprehensive text cleaning and normalization
 * chunking.py: Smart sentence-aware text segmentation
 * processor.py: Orchestrates the entire text processing pipeline
 
-PDF Processing Strategy
+### PDF Processing Strategy
 1. Attempts extraction with multiple libraries (pdfplumber, PyMuPDF, pypdf)
 2. Scores text quality using metrics like word length and spacing
 3. Applies OCR when native extraction quality is poor
 4. Compares OCR vs native results and chooses the best
 
-Text Cleaning Features
+### Text Cleaning Features
 * Fixes hyphenated line breaks
 * Removes running headers and page numbers
 * Strips footnote markers and references
@@ -89,7 +92,7 @@ Text Cleaning Features
 * Corrects punctuation spacing
 * Handles "jammed" text (missing spaces)
 
-🎛️ Configuration Options
+### Configuration Options
 Voice Settings
 * Voice: Choose from 20+ English neural voices
 * Rate: Adjust speaking speed (-50% to +50%)
@@ -99,7 +102,7 @@ Text Cleaning
 * Remove Headers: Strip running headers and page numbers
 * Remove Footnotes: Clean footnote markers and references
 
-📝 File Support
+### File Support
 Supported Formats
 * PDF: Any PDF with text or images (OCR applied automatically)
 * TXT: Plain text files in UTF-8 or Latin-1 encoding
@@ -109,13 +112,13 @@ File Size Limits
 * Automatic chunking prevents memory issues
 * Processing time scales with document length
 
-🔍 Known Limitations
+### Known Limitations
 * OCR Complexity: Image-based PDFs may have text recognition errors
 * Language Support: Optimized for English text only
 * Complex Layouts: Tables and multi-column layouts may not convert perfectly
 * Special Characters: Some Unicode characters may be simplified
 
-🛠️ Development
+### Development
 
 Project Structure
 
@@ -130,14 +133,14 @@ bilbot-baggins/
 ├── assets/                # Images and static files
 └── requirements.txt       # Python dependencies
 
-Contributing
+### Contributing
 1. Fork the repository
 2. Create a feature branch
 3. Make your improvements
 4. Test thoroughly
 5. Submit a pull request
 
-Common Issues
+### Common Issues
 "ERROR: Not a valid PDF file"
 * Ensure your file is a proper PDF (not a renamed image)
 * Try re-saving the PDF from your PDF viewer
@@ -156,7 +159,7 @@ Missing audio for some text
 * Check for special characters that might break TTS
 * Review the cleaned text output for issues
 
-Acknowledgments
+### Acknowledgments
 * Built with Streamlit for the web interface
 * Uses Edge TTS for speech synthesis
 * PDF processing powered by pdfplumber, PyMuPDF, and pypdf

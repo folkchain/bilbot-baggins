@@ -266,12 +266,18 @@ def pick_chunk_size(text: str) -> int:
 def sanitize_for_tts(text: str) -> str:
     return text.replace('&', ' and ').replace('<', '').replace('>', '')
 
-async def synthesize_mp3_async(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int, volume_pct: int):
+async def synthesize_mp3_async(text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int):
     communicate = edge_tts.Communicate(
-        text=text, voice=voice, rate=f"{signed(rate_pct)}%",
-        pitch=f"{signed(pitch_hz)}Hz", volume=f"{signed(volume_pct)}%"
+      text=text,
+      voice=voice,
+      rate=f"{signed(rate_pct)}%",
+      pitch=f"{signed(pitch_hz)}Hz"
     )
-    await communicate.save(out_path)
+    try:
+        await communicate.save(out_path, outputFormat="audio-24khz-96kbitrate-mono-mp3")
+    except TypeError:  # some older builds may not accept output_format here
+        await communicate.save(out_path)  # fall back to library default
+
 
 # --- UI & State Initialization ------------------------------------------------
 st.session_state.setdefault('last_file_identifier', None)
@@ -304,7 +310,6 @@ default_idx = VOICES.index(DEFAULT_VOICE) if DEFAULT_VOICE in VOICES else 0
 voice = st.selectbox("Voice", VOICES, index=default_idx, key="voice")
 rate_pct = st.slider("Rate (% change)", -50, 50, 0, 5, key="rate")
 pitch_hz = st.slider("Pitch (Hz change)", -300, 300, 0, 10, key="pitch")
-volume_pct = 0
 
 st.write("---")
 st.markdown("##### Text Cleaning Options")
@@ -366,7 +371,7 @@ if st.button("🎧 Generate Audio", key="generate", disabled=not st.session_stat
 
                 asyncio.run(synthesize_mp3_async(
                     safe_chunk, voice, part_path,
-                    rate_pct, pitch_hz, volume_pct
+                    rate_pct, pitch_hz
                 ))
                 part_paths.append(part_path)
 

@@ -3,7 +3,6 @@ import re
 # Normalize/handle these as hyphen-like
 _HYPHEN_CLASS = r"[-\u00AD\u2010-\u2015\u2212\u2043\u058A\u05BE\u1400\u1806\u2E3A\u2E3B\uFE63\uFF0D\u30A0\u1100]"
 
-
 def strip_firstline_headers(text: str) -> str:
     """
     A safer header removal function that ONLY removes the first non-blank line
@@ -24,8 +23,11 @@ def strip_firstline_headers(text: str) -> str:
         if first_line_index != -1:
             first_line = lines[first_line_index].strip()
             
-            # Heuristics to identify a header:
-            is_page_number = re.fullmatch(r'[\divxlcdm]+', first_line, re.IGNORECASE)
+            # Heuristics to identify a header - NOW MORE STRICT:
+            is_page_number = (
+                re.fullmatch(r'[\divxlcdm]+', first_line, re.IGNORECASE) and 
+                len(first_line.split()) == 1  # Only if it's just one "word"
+            )
             is_known_header = re.search(r'\b(Chapter|Page|Years)\b', first_line, re.IGNORECASE) and re.search(r'\d', first_line)
             is_short_and_no_punct = len(first_line.split()) < 10 and not re.search(r'[.!?]$', first_line)
 
@@ -36,22 +38,42 @@ def strip_firstline_headers(text: str) -> str:
 
     return PAGE_BREAK.join(cleaned_pages)
 
-def fix_line_break_hyphenation(text: str) -> str:
-    """
-    1) Join words split by a hyphen-like char at line break: 'rea-\nding' -> 'reading'
-    2) Join tokens split like 'kin- folk' -> 'kinfolk'
-    3) Keep your suffix glue behavior (ture/tion/etc.)
-    """
-    # 1) across line breaks
-    text = re.sub(fr"([A-Za-z]){_HYPHEN_CLASS}\n([A-Za-z])", r"\1\2", text)
-
-    # 2) hyphen-like + space in the middle of a line -> join to a single word
-    text = re.sub(fr"(\b\w+){_HYPHEN_CLASS}\s+(\w+\b)", r"\1\2", text)
-
-    # 3) your original suffix glue idea (expanded to any hyphen-like)
-    text = re.sub(fr"([a-z]){_HYPHEN_CLASS}(ture|tion|ment|ness|ing|ed|er|est|ly|ity|ous|ive|ful|less|able|ible)(\s|$)", r"\1\2\3", text, flags=re.IGNORECASE)
-
-    return text
+def remove_bottom_page_numbers(text: str) -> str:
+    """Remove page numbers that appear at the end of pages."""
+    PAGE_BREAK = "\f"
+    if PAGE_BREAK not in text:
+        # Handle single page - check last line
+        lines = text.strip().split('\n')
+        if lines:
+            last_line = lines[-1].strip()
+            if re.fullmatch(r'\d+', last_line):
+                lines.pop()
+        return '\n'.join(lines)
+        
+    pages = text.split(PAGE_BREAK)
+    cleaned_pages = []
+    
+    for page in pages:
+        lines = page.strip().split('\n')
+        if not lines:
+            continue
+            
+        # Check last non-empty line for page number
+        last_line_index = None
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].strip():
+                last_line_index = i
+                break
+                
+        if last_line_index is not None:
+            last_line = lines[last_line_index].strip()
+            # If last line is just a number, remove it
+            if re.fullmatch(r'\d+', last_line):
+                lines.pop(last_line_index)
+                
+        cleaned_pages.append('\n'.join(lines))
+    
+    return PAGE_BREAK.join(cleaned_pages)
 
 def join_paragraphs_smart(text: str) -> str:
     """Joins lines into paragraphs with proper spacing, handling page breaks."""
@@ -78,6 +100,52 @@ def remove_references(text: str) -> str:
     text = re.sub(r'\S+@\S+\.\S+', '', text)
     text = re.sub(r'\([A-Z][a-z]+(?:\s+et\s+al\.?)?,?\s+\d{4}\)', '', text)
     return text
+
+def remove_citation_lines(text: str) -> str:
+    """
+    Remove entire lines that begin with common citation markers.
+    Should be called before join_paragraphs_smart().
+    """
+    # Common citation prefixes (case insensitive)
+    citation_patterns = [
+        r"^op\.?\s*cit\.?",      # op. cit, op cit
+        r"^ibid\.?",             # ibid, ibid.
+        r"^loc\.?\s*cit\.?",     # loc. cit, loc cit
+        r"^cf\.?",               # cf, cf.
+        r"^et\s+al\.?",          # et al, et al.
+        r"^supra\.?",            # supra, supra.
+        r"^infra\.?",            # infra, infra.
+        r"^passim\.?",           # passim, passim.
+        r"^ff\.?",               # ff, ff.
+        r"^see\s+(also\s+)?",    # see, see also
+        r"^nota\s+bene\.?",      # nota bene, n.b.
+        r"^n\.?b\.?",            # n.b., nb
+        r"^vide\.?",             # vide, vide.
+        r"^viz\.?",              # viz, viz.
+        r"^i\.?e\.?",            # i.e., ie
+        r"^e\.?g\.?",            # e.g., eg
+    ]
+    
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped:
+            cleaned_lines.append(line)
+            continue
+            
+        # Check if line starts with any citation pattern
+        is_citation = False
+        for pattern in citation_patterns:
+            if re.match(pattern, line_stripped, re.IGNORECASE):
+                is_citation = True
+                break
+        
+        if not is_citation:
+            cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
 
 def remove_all_quotes(text: str) -> str:
     """
@@ -124,12 +192,17 @@ def clean_special_characters(text: str) -> str:
     # Remove ellipsis and runs of dots
     text = text.replace("…", "")
     text = re.sub(r"\.{2,}", "", text)
+    text = re.sub(r'\(\s*\)|\[\s*\]|\{\s*\}', '', text)
+
 
     # Safety: join 'word- space word' -> 'wordword' (if anything remained)
     text = re.sub(r"(\b\w+)-\s+(\w+\b)", r"\1\2", text)
 
     # Normal hyphenated words become spaced words: 'self-hosted' -> 'self hosted'
     text = re.sub(r"(?<=\w)-(?=\w)", " ", text)
+
+    # NOW: remove any remaining '-' (and any stray soft hyphen, just in case)
+    text = text.replace("-", "").replace("\u00AD", "")
 
     # Remove a few other specials (kept from your original)
     text = re.sub(r"[~|^]", "", text)
