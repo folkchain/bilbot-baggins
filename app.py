@@ -31,13 +31,29 @@ def _inject_css():
     with open(LOGO_PATH, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
 
-    # Removed the .stApp background and color to let the theme handle it
     css = f"""
     <style>
+      /* --- Force our light palette even if viewer/system is dark --- */
+      :root,
+      html,
+      body,
+      .stApp,
+      [data-testid="stAppViewContainer"] {{
+        background: #F4EEDA !important;
+        color: #2E2A22 !important;
+      }}
+
+      /* Sidebar background */
+      section[data-testid="stSidebar"] > div {{
+        background: #EFE7CC !important;
+        color: #2E2A22 !important;
+      }}
+
+      /* Top hero */
       .bilbot-hero {{
         display:flex; align-items:center; gap:16px; margin: 4px 0 12px 0;
         padding: 12px 16px; border-radius: 16px;
-        background: #EFE7CC; border: 2px solid #D7CCAA;
+        background: #EFE7CC !important; border: 2px solid #D7CCAA !important;
         box-shadow: 0 4px 14px rgba(60, 55, 45, 0.08);
       }}
       .bilbot-hero img {{
@@ -46,20 +62,42 @@ def _inject_css():
       .bilbot-title {{
         font-family: Georgia, 'Times New Roman', serif;
         font-weight: 700; font-size: 28px; line-height: 1.1; margin: 0;
-        color: #2E2A22;
+        color: #2E2A22 !important;
       }}
       .bilbot-sub {{
-        margin: 2px 0 0 0; color: #4A7C59; font-size: 14px;
+        margin: 2px 0 0 0; color: #4A7C59 !important; font-size: 14px;
       }}
+
+      /* Buttons (primary + download) */
       .stButton>button, .stDownloadButton>button {{
         border-radius: 12px; padding: 10px 16px; border: 2px solid #3A2F21;
-        background:#4A7C59; color:#F4EEDA; font-weight:600;
+        background:#4A7C59 !important; color:#F4EEDA !important; font-weight:600;
       }}
       .stButton>button:hover, .stDownloadButton>button:hover {{ filter: brightness(1.05); }}
+
+      /* Selectbox container + text */
       .stSelectbox div[data-baseweb="select"] > div {{
         border-radius: 12px; border: 2px solid #3A2F21;
+        background: #F4EEDA !important; color: #2E2A22 !important;
+      }}
+      .stSelectbox div[data-baseweb="select"] * {{
+        color: #2E2A22 !important;
+      }}
+
+      /* Sliders & form controls often get dark colors: normalize */
+      .stSlider [data-baseweb="slider"] *,
+      .stTextInput input, .stTextArea textarea, .stTextInput>div>div,
+      .stTextArea>div>div {{
+        background: #F4EEDA !important; color: #2E2A22 !important;
+        border-color: #3A2F21 !important;
+      }}
+
+      /* Code / preformatted text */
+      pre, code, .stText, .stMarkdown, .stCaption, .stAlert {{
+        color: #2E2A22 !important;
       }}
     </style>
+
     <div class="bilbot-hero">
       <img src="data:image/png;base64,{b64}" alt="BilBot Baggins logo"/>
       <div>
