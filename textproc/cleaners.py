@@ -112,10 +112,6 @@ def remove_footnote_markers(text: str) -> str:
     text = re.sub(r'[\u00B9\u00B2\u00B3\u2070-\u2079\u2020\u2021]+', '', text)  # ¹²³… and †‡
     # Remove page citations like "p. 80", "p.80.", "(pp. 100-105)", etc., and eat a trailing comma/period if present
     text = re.sub(r'(?ix)\(?\s*p{1,2}\.\s*(?:\d+|[ivxlcdm]+)(?:\s*[-–—]\s*(?:\d+|[ivxlcdm]+))?\s*\)?(?:\s*[.,;:])?', '', text)
-    text = re.sub(r'\s+(?=[.,;:!?])', '', text)
-    text = re.sub(r' {2,}', ' ', text)
-
-
 
     # 2) Bottom-of-page footnote blocks, e.g., "3. ..." / "4) ..." / "† ..."
     PAGE_BREAK = "\f"
