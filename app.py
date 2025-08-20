@@ -33,41 +33,75 @@ def _inject_css():
 
     css = f"""
     <style>
-      /* Force light palette everywhere */
-      html, body, .stApp, [data-testid="stAppViewContainer"] {{
-        background: #F4EEDA !important;
+      /* Make the page advertise itself as light to the UA */
+      :root {{
+        color-scheme: light;
+        /* Override Streamlit theme variables used by components */
+        --text-color: #2E2A22 !important;
+        --background-color: #F4EEDA !important;
+        --secondary-background-color: #EFE7CC !important;
+        --primary-color: #4A7C59 !important;
+      }}
+
+      /* Set base text color and force children to inherit it */
+      .stApp, [data-testid="stAppViewContainer"] {{
+        background: linear-gradient(180deg, #F4EEDA 0%, #EFE7CC 100%) !important;
         color: #2E2A22 !important;
       }}
+      .stApp * {{ color: inherit !important; }}
 
       /* Sidebar */
       section[data-testid="stSidebar"] > div {{
         background: #EFE7CC !important;
         color: #2E2A22 !important;
       }}
+      section[data-testid="stSidebar"] * {{ color: inherit !important; }}
+
+      /* Markdown & text containers can get forced dark styles on Cloud */
+      [data-testid="stMarkdownContainer"], .stMarkdown, .stText, .stCaption, .stAlert {{
+        color: #2E2A22 !important;
+      }}
+      [data-testid="stMarkdownContainer"] * {{
+        color: inherit !important;
+      }}
+
+      /* Headings / labels / help text */
+      h1, h2, h3, h4, h5, h6,
+      p, span, label, small, em, strong, mark,
+      .stCheckbox, .stRadio, .stSelectbox, .stSlider, .stTextInput, .stTextArea {{
+        color: #2E2A22 !important;
+      }}
+
+      /* Links */
+      a, a:link, a:visited {{ color: #4A7C59 !important; }}
 
       /* Buttons */
       .stButton>button, .stDownloadButton>button {{
         border-radius: 12px; padding: 10px 16px; border: 2px solid #3A2F21;
         background:#4A7C59 !important; color:#F4EEDA !important; font-weight:600;
       }}
-      .stButton>button:hover, .stDownloadButton>button:hover {{
-        filter: brightness(1.05);
-      }}
+      .stButton>button:hover, .stDownloadButton>button:hover {{ filter: brightness(1.05); }}
 
-      /* Selectboxes and inputs */
+      /* Selectbox / inputs (BaseWeb) — background & text frequently get flipped in dark */
       .stSelectbox div[data-baseweb="select"] > div,
       .stTextInput input, .stTextArea textarea {{
         background: #F4EEDA !important;
         color: #2E2A22 !important;
         border: 2px solid #3A2F21 !important;
       }}
+      .stSelectbox [data-baseweb="select"] * {{ color: #2E2A22 !important; }}
+      .stSelectbox [data-baseweb="select"] svg {{ fill: #2E2A22 !important; }}
 
-      /* Code blocks and markdown text */
-      pre, code, .stText, .stMarkdown, .stCaption, .stAlert {{
-        color: #2E2A22 !important;
+      /* Slider track / thumb can inherit dark variables */
+      .stSlider [data-baseweb="slider"] * {{ color: #2E2A22 !important; }}
+      .stSlider [data-baseweb="slider"] {{
+        background: transparent !important;
       }}
 
-      /* Hero block */
+      /* Code blocks */
+      pre, code {{ color: #2E2A22 !important; }}
+
+      /* Hero block (unchanged; just add !important so it wins) */
       .bilbot-hero {{
         display:flex; align-items:center; gap:16px; margin: 4px 0 12px 0;
         padding: 12px 16px; border-radius: 16px;
@@ -86,6 +120,7 @@ def _inject_css():
         margin: 2px 0 0 0; color: #4A7C59 !important; font-size: 14px;
       }}
     </style>
+
     <div class="bilbot-hero">
       <img src="data:image/png;base64,{b64}" alt="BilBot Baggins logo"/>
       <div>
