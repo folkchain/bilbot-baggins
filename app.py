@@ -308,8 +308,8 @@ st.markdown("""
 
 default_idx = VOICES.index(DEFAULT_VOICE) if DEFAULT_VOICE in VOICES else 0
 voice = st.selectbox("Voice", VOICES, index=default_idx, key="voice")
-rate_pct = st.slider("Rate (% change)", -50, 50, 0, 5, key="rate")
-pitch_hz = st.slider("Pitch (Hz change)", -300, 300, 0, 10, key="pitch")
+rate_pct = st.slider("Rate (% change)", -20, 20, 0, 1, key="rate")
+pitch_hz = st.slider("Pitch (Hz change)", -20, 20, 0, 1, key="pitch")
 
 st.write("---")
 st.markdown("##### Text Cleaning Options")
