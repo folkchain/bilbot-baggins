@@ -194,15 +194,20 @@ def clean_special_characters(text: str) -> str:
     text = re.sub(r"\.{2,}", "", text)
     text = re.sub(r'\(\s*\)|\[\s*\]|\{\s*\}', '', text)
 
-
     # Safety: join 'word- space word' -> 'wordword' (if anything remained)
     text = re.sub(r"(\b\w+)-\s+(\w+\b)", r"\1\2", text)
+
+    # Protect hyphens between numbers (years, ranges, dates)
+    text = re.sub(r'(?<=\d)-(?=\d)', '<<HYPHEN_NUM>>', text)
 
     # Normal hyphenated words become spaced words: 'self-hosted' -> 'self hosted'
     text = re.sub(r"(?<=\w)-(?=\w)", " ", text)
 
-    # NOW: remove any remaining '-' (and any stray soft hyphen, just in case)
+    # Remove all remaining '-' (and stray soft hyphens)
     text = text.replace("-", "").replace("\u00AD", "")
+
+    # Restore protected numeric hyphens
+    text = text.replace('<<HYPHEN_NUM>>', '-')
 
     # Remove a few other specials (kept from your original)
     text = re.sub(r"[~|^]", "", text)
