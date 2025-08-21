@@ -5,6 +5,7 @@ import asyncio
 import tempfile
 from pathlib import Path
 import time
+import hashlib
 
 import streamlit as st
 from PIL import Image
@@ -15,18 +16,6 @@ from edge_tts import VoicesManager
 
 from text_processor import TextProcessor
 from textproc.chunking import split_into_sentences
-
-# add this import (assumes you added clean_document into textproc/cleaners.py)
-try:
-    from textproc.cleaners import clean_document
-except Exception:
-    # Fallback: if you haven't created clean_document yet, fall back to existing TextProcessor.clean_text
-    def clean_document(text: str, kind: str) -> str:
-        # PDF flags from your UI are handled later; here we just reuse your old clean_text
-        return TextProcessor.clean_text(
-            text, remove_running_headers=True, remove_bottom_footnotes=True
-        )
-
 
 # --- App identity & theme -----------------------------------------------------
 APP_NAME = "BilBot Baggins"
@@ -39,38 +28,6 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="auto",
 )
-
-# ============================================================================
-# MEMORY MANAGEMENT FOR STREAMLIT CLOUD
-# ============================================================================
-
-
-def get_memory_info():
-    """Get memory usage stats for monitoring."""
-    try:
-        import psutil
-
-        process = psutil.Process()
-        mem_info = process.memory_info()
-        return {
-            "rss_mb": mem_info.rss / 1024 / 1024,
-            "percent": psutil.virtual_memory().percent,
-        }
-    except:
-        return {"rss_mb": 0, "percent": 0}
-
-
-def check_and_clean_memory(threshold_percent=85):
-    """Check memory and clean if needed."""
-    mem = get_memory_info()
-    if mem["percent"] > threshold_percent:
-        gc.collect()
-        # Clear Streamlit caches if critical
-        if mem["percent"] > 90:
-            st.cache_data.clear()
-            st.cache_resource.clear()
-        return get_memory_info()["percent"] < threshold_percent
-    return True
 
 
 # ============================================================================
@@ -306,76 +263,83 @@ VOICES = load_english_neural_voices()
 SAFE_MAX = 1800  # conservative per-call limit for edge-tts
 
 
+def pick_chunk_size(text: str) -> int:
+    """
+    Determine optimal chunk size based on text characteristics.
+    """
+    try:
+        sents = split_into_sentences(text)
+        if not sents:
+            return 2800
+
+        avg_sent_len = sum(len(s) for s in sents) / len(sents)
+        max_sent_len = max(len(s) for s in sents)
+
+        # Adjust based on sentence characteristics
+        if max_sent_len > 3200:
+            return 2400  # Very long sentences, use smaller chunks
+        elif avg_sent_len > 300:
+            return 2600  # Long average sentences
+        elif avg_sent_len < 120:
+            return 3200  # Short sentences, can use larger chunks
+        else:
+            return 2800  # Default
+
+    except Exception:
+        return 2800
+
+
 def coalesce_chunks(chunks, target=3300, hard_cap=3800):
     """
-    Greedily merge adjacent chunks up to ~target without exceeding hard_cap.
-    Keeps order; reduces chunk count.
+    Greedily merge adjacent chunks up to target size without exceeding hard_cap.
     """
-    out, buf, size = [], [], 0
-    for ch in chunks:
-        L = len(ch)
-        if not buf:
-            buf, size = [ch], L
-            continue
-        if size + 1 + L <= hard_cap and (
-            size + 1 + L <= target or size < target * 0.75
-        ):
-            buf.append(ch)
-            size += 1 + L  # +1 for join newline/space
+    if not chunks:
+        return []
+
+    merged = []
+    current = []
+    current_size = 0
+
+    for chunk in chunks:
+        chunk_len = len(chunk)
+
+        if not current:
+            current = [chunk]
+            current_size = chunk_len
+        elif current_size + chunk_len + 2 <= hard_cap:  # +2 for "\n\n"
+            # Can add this chunk
+            current.append(chunk)
+            current_size += chunk_len + 2
         else:
-            out.append("\n\n".join(buf))
-            buf, size = [ch], L
-    if buf:
-        out.append("\n\n".join(buf))
-    return out
+            # Start new merged chunk
+            merged.append("\n\n".join(current))
+            current = [chunk]
+            current_size = chunk_len
+
+    if current:
+        merged.append("\n\n".join(current))
+
+    return merged
 
 
 def signed(val: int) -> str:
     return f"+{val}" if val >= 0 else str(val)
 
 
-def pick_chunk_size(text: str) -> int:
-    """
-    Aim for larger text chunks, then let TTS enforce SAFE_MAX later.
-    """
-    try:
-        sents = split_into_sentences(text)
-        if not sents:
-            return 3000
-        avg = sum(len(s) for s in sents) / max(1, len(sents))
-        mx = max(len(s) for s in sents)
-
-        # Base target
-        size = 3000
-
-        # If you have very long sentences, back off
-        if mx > 3200:
-            size = 2600
-        elif avg > 300:
-            size = 2800
-        elif avg < 120:
-            size = 3200
-
-        # Bound it
-        return max(2000, min(size, 3400))
-    except Exception:
-        return 3000
-
-
 def sanitize_for_tts(text: str) -> str:
-    # very light sanitizer — we avoid aggressive transforms here
+    """Light sanitization for TTS."""
     return text.replace("&", " and ").replace("<", "").replace(">", "")
 
 
 # ============================================================================
-# OPTIMIZED AUDIO GENERATION WITH MEMORY MANAGEMENT
+# OPTIMIZED AUDIO GENERATION
 # ============================================================================
 
 
 async def synthesize_mp3_async(
     text: str, voice: str, out_path: str, rate_pct: int, pitch_hz: int
 ):
-    """Async synthesis with memory awareness."""
+    """Async synthesis."""
     communicate = edge_tts.Communicate(
         text=text,
         voice=voice,
@@ -394,27 +358,20 @@ def synthesize_with_retry(
     tries: int = 3,
     delay: float = 0.8,
 ) -> bool:
-    """
-    Enhanced retry with memory checking.
-    """
+    """Enhanced retry."""
     for attempt in range(1, tries + 1):
-        # Check memory before each attempt
-        if not check_and_clean_memory(85):
-            return False  # Skip if memory is too high
-
         try:
             asyncio.run(synthesize_mp3_async(text, voice, out_path, rate_pct, pitch_hz))
             return True
         except Exception:
-            time.sleep(delay * attempt)
+            if attempt < tries:
+                time.sleep(delay * attempt)
     return False
 
 
 # ============================================================================
 # CACHING FOR FILE PROCESSING
 # ============================================================================
-
-import hashlib
 
 
 @st.cache_data(max_entries=3, ttl=900)
@@ -425,19 +382,13 @@ def process_file_unified(
     remove_footnotes: bool,
 ) -> dict:
     """
-    One function to:
-      - detect kind (txt/pdf)
-      - extract/decode
-      - clean with the right path
-      - chunk
-    Returns a dict with raw_text, cleaned_text, chunks, meta.
+    Unified file processing that properly uses TextProcessor.
     """
-    name = file_name or "upload"
-    ext = Path(name).suffix.lower()
+    # Detect file type
+    ext = Path(file_name).suffix.lower()
     is_pdf = ext == ".pdf" or file_bytes.startswith(b"%PDF-")
-    kind = "pdf" if is_pdf else "txt"
 
-    # 1) extract / decode
+    # Extract text
     if is_pdf:
         raw_text = TextProcessor.read_pdf_file(file_bytes)
     else:
@@ -445,49 +396,29 @@ def process_file_unified(
 
     if not raw_text or not raw_text.strip():
         return {
-            "raw_text": raw_text or "",
+            "raw_text": "",
             "cleaned_text": "",
             "chunks": [],
-            "meta": {"kind": kind, "error": "Empty after extraction"},
+            "meta": {"error": "Could not extract text from file"},
         }
 
-    # 2) clean with correct path
-    # clean_document handles kind=txt without page logic, kind=pdf with page logic
-    cleaned_text = clean_document(raw_text, kind=kind)
+    # Clean text using TextProcessor
+    cleaned_text = TextProcessor.clean_text(
+        text=raw_text,
+        remove_running_headers=remove_headers,
+        remove_bottom_footnotes=remove_footnotes,
+        is_pdf=is_pdf,
+    )
 
+    # Fallback if cleaning removed too much
     if len(cleaned_text.strip()) < max(50, int(0.02 * len(raw_text))):
-        cleaned_text = raw_text  # fallback to raw rather than return nearly empty
+        cleaned_text = raw_text
 
-    # Optionally honor UI toggles for PDF path
-    if is_pdf:
-        # If the router’s PDF path already did headers/footnotes, you can skip this.
-        # If you want to enforce per-toggle behavior, you can lightly re-run:
-        cleaned_text = TextProcessor.clean_text(
-            cleaned_text,
-            remove_running_headers=remove_headers,
-            remove_bottom_footnotes=remove_footnotes,
-        )
-
-    # 3) chunk
-    def pick_chunk_size_for(text: str) -> int:
-        try:
-            sents = split_into_sentences(text)
-            if not sents:
-                return 2200
-            avg = sum(len(s) for s in sents) / max(1, len(sents))
-            size = 2200
-            if max(len(s) for s in sents) > 2400:
-                size = 1800
-            elif avg > 300:
-                size = 2000
-            elif avg < 120:
-                size = 2600
-            return max(1500, min(size, 2800))
-        except Exception:
-            return 2200
-
-    chunk_size = pick_chunk_size_for(cleaned_text)
+    # Chunk the text
+    chunk_size = pick_chunk_size(cleaned_text)
     chunks = TextProcessor.smart_split_into_chunks(cleaned_text, max_length=chunk_size)
+
+    # Coalesce small chunks
     chunks = coalesce_chunks(chunks, target=3300, hard_cap=3800)
 
     return {
@@ -495,8 +426,8 @@ def process_file_unified(
         "cleaned_text": cleaned_text,
         "chunks": chunks,
         "meta": {
-            "kind": kind,
-            "file_name": name,
+            "kind": "pdf" if is_pdf else "txt",
+            "file_name": file_name,
             "chars_raw": len(raw_text),
             "chars_clean": len(cleaned_text),
             "chunk_size": chunk_size,
@@ -506,7 +437,7 @@ def process_file_unified(
 
 
 def make_file_id(file_bytes: bytes, file_name: str) -> str:
-    # stable cache key to drive reprocessing decisions
+    """Create stable cache key."""
     h = hashlib.md5(file_bytes[:1_000_000]).hexdigest()
     return f"{file_name}:{len(file_bytes)}:{h}"
 
@@ -520,33 +451,26 @@ st.session_state.setdefault("mp3_bytes", None)
 st.session_state.setdefault("mp3_filename", "")
 st.session_state.setdefault("txt_filename", "")
 
-# Memory monitor in sidebar
-with st.sidebar:
-    mem_info = get_memory_info()
-    if mem_info["percent"] > 80:
-        st.warning(f"⚠️ Memory: {mem_info['percent']:.0f}%")
-        if st.button("Clear Memory"):
-            # Keep user preferences
-            keys_to_keep = {"voice", "rate", "pitch", "rm_hdr", "rm_foot"}
-            for key in list(st.session_state.keys()):
-                if key not in keys_to_keep:
-                    del st.session_state[key]
-            st.cache_data.clear()
-            gc.collect()
-            st.rerun()
-    else:
-        st.success(f"Memory: {mem_info['percent']:.0f}% OK")
 
-# File uploader with 50MB limit
+# File uploader
 uploaded = st.file_uploader(
-    "Upload a PDF or TXT (max 50MB)", type=["pdf", "txt"], key="upload"
+    "Upload a PDF or TXT",  # non-empty for accessibility
+    type=["pdf", "txt"],
+    key="upload",
+    label_visibility="collapsed",  # keeps clean UI
 )
+
+if uploaded:
+    st.write("Filename:", uploaded.name)
+    st.write("MIME type:", uploaded.type)
+    st.write("Size (bytes):", uploaded.size)
+
 
 # Check file size
 if uploaded:
     file_size_mb = uploaded.size / (1024 * 1024)
-    if file_size_mb > 50:
-        st.error(f"File too large ({file_size_mb:.1f}MB). Maximum size is 50MB.")
+    if file_size_mb > 200:
+        st.error(f"File too large ({file_size_mb:.1f}MB). Maximum size is 200MB.")
         st.stop()
 
 st.markdown("""
@@ -561,6 +485,7 @@ st.markdown("""
 ---
 """)
 
+# Voice settings
 default_idx = VOICES.index(DEFAULT_VOICE) if DEFAULT_VOICE in VOICES else 0
 voice = st.selectbox("Voice", VOICES, index=default_idx, key="voice")
 rate_pct = st.slider("Rate (% change)", -20, 20, 0, 1, key="rate")
@@ -574,37 +499,30 @@ remove_headers = st.checkbox(
 remove_footnotes = st.checkbox("Remove footnote markers", value=True, key="rm_foot")
 st.write("---")
 
-current_options = (remove_headers, remove_footnotes)
-# app.py upload handler
+# Process uploaded file
 if uploaded:
-    # Read once
     file_bytes = uploaded.getvalue()
     file_name = uploaded.name
 
-    # Build file id and check for option or file changes
+    # Check if reprocessing needed
     file_identifier = make_file_id(file_bytes, file_name)
+    current_options = (remove_headers, remove_footnotes)
     needs_processing = file_identifier != st.session_state.get(
         "last_file_identifier"
-    ) or (remove_headers, remove_footnotes) != st.session_state.get("last_options")
+    ) or current_options != st.session_state.get("last_options")
 
     if needs_processing:
         st.session_state.last_file_identifier = file_identifier
-        st.session_state.last_options = (remove_headers, remove_footnotes)
+        st.session_state.last_options = current_options
         st.session_state.mp3_bytes = None
         st.session_state.mp3_filename = ""
         st.session_state.txt_filename = ""
 
-        # memory hygiene
+        # Clear old data
         for key in ("chunks", "cleaned_text"):
             if key in st.session_state:
                 del st.session_state[key]
         gc.collect()
-
-        if not check_and_clean_memory(80):
-            st.error(
-                "Insufficient memory. Use the sidebar button to clear and try again."
-            )
-            st.stop()
 
         with st.spinner("Analyzing and cleaning text..."):
             result = process_file_unified(
@@ -623,32 +541,26 @@ if uploaded:
                 st.session_state.cleaned_text = result["cleaned_text"]
                 st.session_state.chunks = result["chunks"]
 
-                # helpful telemetry
+                # Show stats
                 meta = result["meta"]
                 st.success(
-                    f"Kind: {meta['kind'].upper()} • Raw: {meta['chars_raw']} chars • "
-                    f"Clean: {meta['chars_clean']} chars • Chunks: {meta['num_chunks']} "
-                    f"(~{meta['chunk_size']} chars)"
+                    f"**{meta['kind'].upper()}** • "
+                    f"Raw: {meta['chars_raw']:,} chars • "
+                    f"Clean: {meta['chars_clean']:,} chars • "
+                    f"Chunks: {meta['num_chunks']}"
                 )
 
-    # Show quick status when not reprocessing
-    if st.session_state.get("cleaned_text"):
-        st.write(
-            f"Raw chars: {len(st.session_state.cleaned_text) + 0} "
-            f"→ Cleaned chars: {len(st.session_state.cleaned_text)}"
-        )
-
-
+# Generate audio button (drop-in replacement)
 if st.button(
     "🎧 Generate Audio", key="generate", disabled=not st.session_state.get("chunks")
 ):
     chunks = st.session_state.get("chunks", [])
     if not chunks:
-        st.warning("No chunks available yet. Upload a file and process it first.")
+        st.warning("No chunks available. Upload and process a file first.")
         st.stop()
 
     total = len(chunks)
-    prog = st.progress(0, text="Starting… 0%")
+    prog = st.progress(0.0, text="Starting… 0%")
     status = st.empty()
     started = time.monotonic()
 
@@ -657,21 +569,26 @@ if st.button(
             part_paths = []
             skipped = []
 
-            for i, ch in enumerate(chunks, 1):
-                if not ch.strip():
+            # precompute per-chunk progress width
+            per_chunk = 1.0 / max(1, total)
+
+            for i, chunk in enumerate(chunks, 1):
+                if not chunk.strip():
                     continue
 
-                # Check memory periodically
-                if i % 10 == 0 and not check_and_clean_memory(85):
-                    st.warning(f"Memory limit reached. Processed {i}/{total} chunks.")
-                    break
+                # Heartbeat BEFORE doing work on this chunk
+                start_frac = (i - 1) * per_chunk
+                prog.progress(
+                    start_frac,
+                    text=f"Preparing chunk {i}/{total}… {int(start_frac * 100)}%",
+                )
+                status.write(f"🔊 Generating audio… chunk {i}/{total}")
 
-                status.write(f"🔊 Generating audio… {i}/{total}")
                 base_path = os.path.join(td, f"part_{i:03d}")
 
-                safe_chunk = sanitize_for_tts(ch)
+                safe_chunk = sanitize_for_tts(chunk)
 
-                # Hard cap and split if needed
+                # Split if over TTS limit
                 if len(safe_chunk) > SAFE_MAX:
                     parts = [
                         safe_chunk[j : j + SAFE_MAX]
@@ -680,45 +597,55 @@ if st.button(
                 else:
                     parts = [safe_chunk]
 
-                # Synthesize each part with retry
-                for j, p in enumerate(parts, 1):
+                # Progress within this chunk
+                num_parts = len(parts)
+                for j, part in enumerate(parts, 1):
+                    # inner progress: advance within the chunk
+                    inner_frac = start_frac + (j - 1) / max(1, num_parts) * per_chunk
+                    prog.progress(
+                        inner_frac,
+                        text=f"Chunk {i}/{total}, part {j}/{num_parts}… {int(inner_frac * 100)}%",
+                    )
+
                     part_path = (
                         f"{base_path}_{j:02d}.mp3"
-                        if len(parts) > 1
+                        if num_parts > 1
                         else f"{base_path}.mp3"
                     )
                     ok = synthesize_with_retry(
-                        p, voice, part_path, rate_pct, pitch_hz, tries=3, delay=0.8
+                        part, voice, part_path, rate_pct, pitch_hz
                     )
                     if ok:
                         part_paths.append(part_path)
                     else:
-                        skipped.append(p)
+                        skipped.append(part)
 
-                frac = i / total
-                prog.progress(frac, text=f"Generating… {int(frac * 100)}%")
+                # Mark this whole chunk as done
+                done_frac = i * per_chunk
+                prog.progress(
+                    done_frac,
+                    text=f"Completed chunk {i}/{total}… {int(done_frac * 100)}%",
+                )
 
             if not part_paths:
                 raise RuntimeError("All chunks failed to synthesize.")
 
-            prog.progress(1.0, text="Merging audio…")
+            prog.progress(1.0, text="Merging audio… 100%")
 
-            # Merge in batches to manage memory
+            # Merge audio files
             audio_chunks = []
             for path in part_paths:
                 with open(path, "rb") as f:
                     audio_chunks.append(f.read())
-
-                # Periodically merge and clear to prevent memory buildup
                 if len(audio_chunks) >= 50:
-                    partial_merge = b"".join(audio_chunks)
-                    audio_chunks = [partial_merge]
+                    audio_chunks = [b"".join(audio_chunks)]
                     gc.collect()
 
             final_bytes = b"".join(audio_chunks)
             del audio_chunks
             gc.collect()
 
+        # Save results to session
         st.session_state.mp3_bytes = final_bytes
         out_base = Path(uploaded.name).stem
         st.session_state.mp3_filename = f"{out_base}.mp3"
@@ -727,13 +654,10 @@ if st.button(
         elapsed = time.monotonic() - started
         prog.progress(1.0, text=f"Done in {elapsed:.1f}s")
 
-        # Show any skipped fragments
         if skipped:
             with st.expander(f"⚠️ Skipped {len(skipped)} fragment(s)"):
-                st.write(
-                    "These fragments failed after retries. You can download and review them:"
-                )
-                skipped_txt = "\\n\\n---\\n\\n".join(skipped)
+                st.write("These fragments failed after retries:")
+                skipped_txt = "\n\n---\n\n".join(skipped)
                 st.download_button(
                     "⬇️ Download skipped fragments",
                     data=skipped_txt.encode("utf-8"),
@@ -744,15 +668,12 @@ if st.button(
     except Exception as e:
         prog.progress(0.0, text="Failed")
         st.error(f"Error: {str(e)}")
-        if "i" in locals():
-            st.text_area(
-                "Problematic chunk", chunks[i - 1] if i > 0 else "", height=200
-            )
         st.session_state.mp3_bytes = None
-
     finally:
         status.empty()
 
+
+# Download section
 if st.session_state.get("mp3_bytes"):
     st.success("✅ Your audiobook is ready!")
     c1, c2 = st.columns(2)

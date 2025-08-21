@@ -10,7 +10,6 @@ _ZW = re.compile(r"[\u200B\u200C\u200D\u2060\ufeff]")
 _CTRL = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
 
 # Hyphen-like characters
-# Removed invalid ranges and unrelated codepoints; kept practical dash/minus forms
 _HYPHEN_CHARS = r"[-\u00AD\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u2043\u05BE\u1400\u1806\u2E3A\u2E3B\uFE63\uFF0D\u30A0]"
 _HYPHEN_RE = re.compile(_HYPHEN_CHARS)
 
@@ -33,18 +32,18 @@ _INLINE_FOOTNOTE_PATTERNS = [
     ),  # superscripts/daggers
 ]
 
-# p. 12, pp. 12–14, (p. iv), etc., with optional parens and trailing punctuation
+# p. 12, pp. 12–14, (p. iv), etc.
 _PAGE_CITATION_RE = re.compile(
-    r"""(?ix)                # flags: ignore case, verbose
-        \(?                  # optional opening parenthesis
-        \s*                  # optional whitespace
-        p{1,2}\.             # 'p.' or 'pp.'
-        \s*                  # optional whitespace
-        (?:\d+|[ivxlcdm]+)   # page number (digits or roman)
-        (?:\s*[-–—]\s*(?:\d+|[ivxlcdm]+))?  # optional range
-        \s*                  # optional whitespace
-        \)?                  # optional closing parenthesis
-        (?:\s*[.,;:])?       # optional trailing punctuation
+    r"""(?ix)
+        \(?
+        \s*
+        p{1,2}\.
+        \s*
+        (?:\d+|[ivxlcdm]+)
+        (?:\s*[-–—]\s*(?:\d+|[ivxlcdm]+))?
+        \s*
+        \)?
+        (?:\s*[.,;:])?
     """,
     re.VERBOSE | re.IGNORECASE,
 )
@@ -57,7 +56,7 @@ _WWW_RE = re.compile(r"www\.[^\s]+")
 _EMAIL_RE = re.compile(r"\S+@\S+\.\S+")
 _CITATION_RE = re.compile(r"\([A-Z][a-z]+(?:\s+et\s+al\.?)?,?\s+\d{4}\)")
 
-# Citation line prefixes (compiled with case-insensitive flag)
+# Citation line prefixes
 _CITATION_LINE_PATTERNS = [
     re.compile(r"^op\.?\s*cit\.?", re.I),
     re.compile(r"^ibid\.?", re.I),
@@ -77,12 +76,30 @@ _CITATION_LINE_PATTERNS = [
     re.compile(r"^e\.?g\.?", re.I),
 ]
 
-# Quote characters pattern — complete, single character class
+_FOOTNOTE_INLINE_RE = re.compile(
+    r"\s*\d{1,3}(?![0-9-])\b"  # Standalone numbers (e.g., "31")
+    r"|[(][\w\s,.]+[)]"  # Simple citations (e.g., "(ed.)")
+)
+
+
+def _remove_inline_footnotes(text: str) -> str:
+    """Remove inline footnote markers and citations."""
+    return _FOOTNOTE_INLINE_RE.sub("", text)
+
+
+# Remove curly/smart quotes etc. Keep ASCII apostrophe ' for contractions.
 _QUOTES_RE = re.compile(
-    r"""["'`´“”‘’\u2018\u2019\u201A\u201B\u201C\u201D\u201E\u201F
-         \u00AB\u00BB\u2039\u203A\u301D\u301E\uFF02\u02DD
-         \u2032\u2035\u00B4\u02B9\u05F4]""",
-    re.VERBOSE,
+    r"[\"`´“”‘’\u2018\u2019\u201A\u201B\u201C\u201D\u201E\u201F\u00AB\u00BB\u2039\u203A\u301D\u301E\uFF02\u02DD\u2032\u2035\u00B4\u02B9\u05F4]"
+)
+
+# Clause dashes of any kind (but NOT numeric ranges)
+_DASH_CLAUSE_RE = re.compile(r"(?<!\d)\s*[–—-]\s*(?!\d)")
+
+# Running header prefix at page start, even if fused with body text
+_RUNNING_HEADER_PREFIX_RE = re.compile(
+    r"^(?:CHAPTER\s+[IVXLCDM\d]+(?:\s+[A-Za-z][\w\-]{0,20}){0,4}"
+    r"|[A-Z][A-Z &\-\.:]{3,80}"
+    r"|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s+(?=[A-Z])"
 )
 
 # Special characters to remove
@@ -103,23 +120,57 @@ _PAGE_NUMBER_RE = re.compile(r"^\d+$")
 _ROMAN_PAGE_RE = re.compile(r"^[divxlcdm]+$", re.IGNORECASE)
 
 # --- TXT-specific line patterns ---
-# (keep your imports and compiled regexes above intact)
-
-# Isolated page numbers or roman numerals (commonly dumped into TXT exports)
 _TXT_PAGE_NUM_RE = re.compile(r"^\s*(\d{1,4}|[ivxlcdm]{1,6})\s*$", re.IGNORECASE)
-
-# Slash headings like "The Image as Guide / 17" or "20 / The Hero…"
 _TXT_SLASH_HDR_RE = re.compile(r"^\s*(?:\d{1,4}\s*/\s*.+|.+\s*/\s*\d{1,4})\s*$")
-
-# Classic footnote line starters in body text
 _TXT_FOOTNOTE_LINE_RE = re.compile(r"^\s*(?:\d{1,3}[.)]|[*\u2020\u2021])\s+")
 
 # Use real form-feed and newline characters
 PAGE_BREAK = "\f"
 
+# --- Extra compiled patterns (new) ---
+# Unicode "letter" class using stdlib re (no \p needed)
+_LETTER_CLASS = r"[^\W\d_]"  # matches any Unicode letter; excludes digits and "_"
+# Hyphen/em-dash between letters only (don’t touch numbers/dates)
+_DASH_JOINED_WORDS_RE = re.compile(rf"(?<={_LETTER_CLASS})[-–—](?={_LETTER_CLASS})")
+# em-dash between numbers (numeric ranges) → en dash "–"
+_EMDASH_NUM_RANGE_RE = re.compile(r"(?<=\d)\s*—\s*(?=\d)")
+# raw slashes and square brackets to drop in one pass
+_BRACKETS_SLASH_RE = re.compile(r"[\\/[\]]")
+# underscores → space
+_UNDERSCORES_RE = re.compile(r"_+")
+# runs of roman numerals in body text (2+ tokens) → remove
+_ROMAN_RUN_RE = re.compile(
+    r"(?:^|\s)(?:[IVXLCDM]{1,6})(?:\s+[IVXLCDM]{1,6}){1,}(?=\s|[.,;:!?]|$)"
+)
+# hyphen/dash between digits (for numeric ranges)
+_HYPHEN_BETWEEN_DIGITS_RE = re.compile(r"(?<=\d)[-\u2010-\u2015\u2212](?=\d)")
+
+# --- Extra compiled helpers to replace prior ad-hoc calls ---
+_HARD_WRAP_JOIN_RE = re.compile(r"\s*\n\s*")  # used to join hard wraps in TXT
+_MULTI_BLANKLINES_RE = re.compile(r"\n{3,}")  # collapse 3+ blank lines → 2
+# Common running-header lead words at start of line
+_HDR_KEYWORDS_RE = re.compile(
+    r"^\s*(?:chapter|ch\.|part|book|section|sec\.|page|pp\.|volume|vol\.|no\.|number|issue|table|figure|fig\.)\b",
+    re.IGNORECASE,
+)
+_HAS_DIGIT_RE = re.compile(r"\d")
+
+# ============================================================================
+# CORE UTILITIES
+# ============================================================================
+
+
+def simple_tts_clean(text: str) -> str:
+    """Minimal pre-clean step: strip control chars, zero-width spaces, normalize whitespace."""
+    if not text:
+        return ""
+    text = _ZW.sub("", text)
+    text = _CTRL.sub("", text)
+    text = _WHITESPACE_RE.sub(" ", text)
+    return text.strip()
+
 
 def strip_firstline_headers(text: str) -> str:
-    """Remove first line headers from pages - optimized."""
     if not text:
         return ""
     pages = text.split(PAGE_BREAK) if PAGE_BREAK in text else [text]
@@ -131,11 +182,19 @@ def strip_firstline_headers(text: str) -> str:
         first_idx = next((i for i, line in enumerate(lines) if line.strip()), -1)
         if first_idx != -1:
             first_line = lines[first_idx].strip()
+
+            # NEW: remove a header prefix even if the header is fused to body text
+            m = _RUNNING_HEADER_PREFIX_RE.match(first_line)
+            if m:
+                first_line = first_line[m.end() :].lstrip()
+                lines[first_idx] = first_line
+
+            # Existing heuristics: pop obvious header-only first lines
             if (
                 (_ROMAN_PAGE_RE.match(first_line) and len(first_line.split()) == 1)
                 or (
-                    re.search(r"\b(Chapter|Page|Years)\b", first_line, re.I)
-                    and re.search(r"\d", first_line)
+                    _HDR_KEYWORDS_RE.search(first_line)
+                    and _HAS_DIGIT_RE.search(first_line)
                 )
                 or (
                     len(first_line.split()) < 10
@@ -143,6 +202,7 @@ def strip_firstline_headers(text: str) -> str:
                 )
             ):
                 lines.pop(first_idx)
+
         cleaned_pages.append("\n".join(lines))
     return (
         PAGE_BREAK.join(cleaned_pages)
@@ -172,6 +232,11 @@ def remove_bottom_page_numbers(text: str) -> str:
         if PAGE_BREAK in text
         else "\n".join(cleaned_pages)
     )
+
+
+def final_flatten(text: str) -> str:
+    """Flattens the entire text into a single, space-separated paragraph."""
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def fix_line_break_hyphenation(text: str) -> str:
@@ -214,59 +279,12 @@ def _detect_repeated_headers(lines, min_hits: int = 3) -> set[str]:
     return {s for s, n in freq.items() if n >= min_hits}
 
 
-def clean_txt_headers_and_footnotes(text: str) -> str:
-    """
-    TXT cleaner (no page breaks). Removes:
-      - repeated running headers
-      - isolated page numbers (arabic/roman)
-      - slash headings ('Title / 23' or '20 / Title')
-      - classic footnote starters ('12) ...', '† ...')
-      - inline page citations '(p. 12)', '(pp. 12–14)'
-    """
-    if not text:
-        return ""
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = _PAGE_CITATION_RE.sub("", text)
-    lines = text.split("\n")
-    headers = _detect_repeated_headers(lines)
-
-    cleaned = []
-    for i, ln in enumerate(lines):
-        s = ln.strip()
-        if not s:
-            cleaned.append(ln)
-            continue
-        if s in headers:
-            continue
-        if _TXT_PAGE_NUM_RE.match(s):
-            prev_blank = (i - 1 < 0) or (not lines[i - 1].strip())
-            next_blank = (i + 1 >= len(lines)) or (not lines[i + 1].strip())
-            if prev_blank or next_blank:
-                continue
-        if _TXT_SLASH_HDR_RE.match(s):
-            continue
-        if _TXT_FOOTNOTE_LINE_RE.match(s):
-            prev_blank = (i - 1 < 0) or (not lines[i - 1].strip())
-            if prev_blank or len(s.split()) <= 14:
-                continue
-        cleaned.append(ln)
-
-    out = "\n".join(cleaned)
-    for pattern, replacement in _INLINE_FOOTNOTE_PATTERNS:
-        out = pattern.sub(replacement, out)
-    out = re.sub(r"\n{3,}", "\n\n", out).strip()
-    return out
-
-
 def fix_punctuation_spacing(text: str) -> str:
-    """Use existing compiled patterns to normalize punctuation spacing."""
+    """Normalize punctuation spacing."""
     if not text:
         return ""
-    # remove spaces before punctuation
     text = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
-    # ensure a single space after punctuation when followed by a word/number
     text = _PUNCT_NEEDS_SPACE_RE.sub(r"\1 \2", text)
-    # collapse runs of punctuation like "?!..." to a single mark of the first type
     text = _MULTI_PUNCT_RE.sub(r"\1", text)
     return text
 
@@ -278,52 +296,20 @@ def normalize_whitespace(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
-def simple_tts_clean(text: str) -> str:
-    """Minimal pre-clean step: strip control chars, zero-width spaces, normalize whitespace."""
-    if not text:
-        return ""
-    text = _ZW.sub("", text)  # zero-width chars
-    text = _CTRL.sub("", text)  # control chars
-    text = _WHITESPACE_RE.sub(" ", text)  # collapse spaces
-    return text.strip()
-
-
-def join_paragraphs_smart_txt(text: str) -> str:
-    """Join hard-wrapped lines within paragraphs for TXT, keep blank-line breaks."""
-    if not text:
-        return ""
-    paras = [p.strip() for p in text.split("\n\n")]
-    out = []
-    for p in paras:
-        if not p:
-            out.append("")
-            continue
-        p = re.sub(r"\s*\n\s*", " ", p)
-        p = _WHITESPACE_RE.sub(" ", p).strip()
-        out.append(p)
-    return "\n\n".join(out)
-
-
 def remove_footnote_markers(text: str) -> str:
     """Remove inline footnote markers and page-citation stubs."""
     if not text:
         return ""
-    # Inline markers like [12], (3), punctuation+12, superscripts/daggers
     for pattern, replacement in _INLINE_FOOTNOTE_PATTERNS:
         text = pattern.sub(replacement, text)
-    # (p. 12), (pp. 12–14), etc.
     text = _PAGE_CITATION_RE.sub("", text)
-
-    # Also trim short footnote blocks near page bottoms if form-feeds exist
     pages = text.split(PAGE_BREAK) if PAGE_BREAK in text else [text]
     cleaned_pages = []
     for page in pages:
         lines = page.splitlines()
         cut = len(lines)
-        # scan up to ~15 lines from bottom
         for i in range(len(lines) - 1, max(-1, len(lines) - 15), -1):
             if _FOOTNOTE_START_RE.match(lines[i]):
-                # typical footnote zone: last ~¼ of page or within last 14 lines
                 if len(lines) - i <= 14 or i >= int(0.75 * len(lines)):
                     cut = i
                     break
@@ -333,6 +319,12 @@ def remove_footnote_markers(text: str) -> str:
         if PAGE_BREAK in text
         else "\n".join(cleaned_pages)
     )
+
+
+def remove_all_quotes(text: str) -> str:
+    if not text:
+        return ""
+    return _QUOTES_RE.sub("", text)
 
 
 def remove_references(text: str) -> str:
@@ -363,99 +355,37 @@ def remove_citation_lines(text: str) -> str:
     return "\n".join(kept)
 
 
-def _looks_paged(text: str) -> bool:
-    """Detect whether page-aware logic is safe: real form feeds or very regular page lines."""
-    if "\f" in text:
-        return True
-    lines = text.split("\n")
-    hits = 0
-    for i, ln in enumerate(lines):
-        s = ln.strip()
-        if _TXT_PAGE_NUM_RE.match(s):
-            prev_blank = (i == 0) or (not lines[i - 1].strip())
-            next_blank = (i == len(lines) - 1) or (not lines[i + 1].strip())
-            if prev_blank or next_blank:
-                hits += 1
-    return hits >= max(5, len(lines) // 80)  # ~1 marker per 80 lines or at least 5
-
-
-def clean_document(
-    text: str,
-    kind: str,
-    remove_headers: bool = True,
-    remove_footnotes: bool = True,
-    *,
-    allow_fallback: bool = True,
-    fallback_floor_ratio: float = 0.001,  # 0.1% floor
-    fallback_abs_min: int = 50,
-) -> str:
+# ----------------------------------------------------------------------------
+# Small helpers using compiled patterns (new)
+# ----------------------------------------------------------------------------
+def _clean_special_characters(text: str) -> str:
     """
-    Router for TXT vs PDF cleaning.
-      - TXT: TXT heuristics (no page logic).
-      - PDF: page-aware functions, respecting toggles.
-      - Fallback is VERY conservative (only if almost everything got deleted).
+    Normalize hyphens, handle em-dashes, drop quotes/brackets/slashes/underscores,
+    and remove ellipses & empty brackets.
     """
     if not text:
         return ""
+    # normalize hyphens; drop soft hyphen
+    text = _HYPHEN_RE.sub("-", text).replace("\u00ad", "")
+    # numeric ranges: various dashes between digits → en dash
+    text = _HYPHEN_BETWEEN_DIGITS_RE.sub("–", text)
+    text = _EMDASH_NUM_RANGE_RE.sub("–", text)  # 12—15 → 12–15
+    # clause pause dash (—, –, -) → ", "  (but numeric ranges handled above)
+    text = _DASH_CLAUSE_RE.sub(", ", text)
+    # [ ] \ / → space
+    text = _BRACKETS_SLASH_RE.sub(" ", text)
+    # underscores → space
+    text = _UNDERSCORES_RE.sub(" ", text)
+    # remove special ascii garnish
+    text = _SPECIAL_CHARS_RE.sub("", text)
+    # ... and … ; empty () [] {}
+    text = _ELLIPSIS_RE.sub("", text)
+    text = _EMPTY_BRACKETS_RE.sub("", text)
+    return text
 
-    original = text
-    text = simple_tts_clean(text)  # minimal sanitize
 
-    if kind and kind.lower() == "txt":
-        # ---------------- TXT path ----------------
-        raw_len = len(text)
-
-        # inline page cites etc.
-        text = _PAGE_CITATION_RE.sub("", text)
-
-        # run hyphen fix BEFORE joining so "Emigra-\n tion" -> "Emigration"
-        text = fix_line_break_hyphenation(text)
-
-        # structural TXT cleanup you already have
-        text = clean_txt_headers_and_footnotes(text)
-        text = join_paragraphs_smart_txt(text)
-
-        # remove underscores
-        text = re.sub(r"_+", " ", text)
-
-        # domain tweak near the end
-        text = re.sub(r"\bforeign-born\b", "foreign born", text, flags=re.IGNORECASE)
-
-        # final polish you already have
-        text = fix_punctuation_spacing(text)
-        text = normalize_whitespace(text)
-
-        if allow_fallback:
-            floor = max(fallback_abs_min, int(fallback_floor_ratio * max(1, raw_len)))
-            if len(text.strip()) < floor:
-                text = normalize_whitespace(original)
-
-        return text
-
-    else:
-        # ---------------- PDF path ----------------
-        if remove_headers:
-            text = strip_firstline_headers(text)
-            text = remove_bottom_page_numbers(text)
-
-        text = fix_line_break_hyphenation(text)
-
-        if remove_footnotes:
-            text = remove_footnote_markers(text)
-            text = remove_citation_lines(text)
-            text = remove_references(text)
-        else:
-            text = _PAGE_CITATION_RE.sub("", text)
-
-        text = join_paragraphs_smart(text)
-        text = fix_punctuation_spacing(text)
-        text = normalize_whitespace(text)
-
-        if allow_fallback:
-            floor = max(
-                fallback_abs_min, int(fallback_floor_ratio * max(1, len(original)))
-            )
-            if len(text.strip()) < floor:
-                text = normalize_whitespace(original)
-
-        return text
+def _remove_midtext_roman_runs(text: str) -> str:
+    """Remove sequences like 'IV VII VIII …' in running text (keeps single tokens)."""
+    if not text:
+        return ""
+    return _ROMAN_RUN_RE.sub(" ", text)
