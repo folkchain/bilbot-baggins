@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-import io
 import re
 from typing import Optional
 
-import fitz  # PyMuPDF
 
 PAGE_BREAK = "\f"
 
@@ -64,12 +62,29 @@ def fix_extraction_spacing(text: str) -> str:
 
 
 def extract_with_pymupdf(file_bytes: bytes) -> str:
+    """Extract with PyMuPDF/fitz."""
     try:
-        doc = fitz.open("pdf", file_bytes)
-        text = ""
-        for page in doc:
-            text += page.get_text("text") + "\n"  # "text" for reading order
-        doc.close()
-        return fix_extraction_spacing(text.strip())
+        import fitz  # PyMuPDF
+    except Exception:
+        return ""
+
+    try:
+        pages = []
+        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+            for page_num, page in enumerate(doc):
+                # Try text extraction with different methods
+                txt = page.get_text("text") or ""
+
+                # If text seems bad, try blocks method
+                if len(txt.split()) < 10 and page_num < 3:
+                    blocks = page.get_text("blocks")
+                    txt = " ".join(block[4] for block in blocks if block[6] == 0)
+
+                pages.append(txt.strip())
+
+        result = (PAGE_BREAK + "\n").join(pages).strip()
+        # Fix spacing issues
+        result = fix_extraction_spacing(result)
+        return result
     except Exception:
         return ""
